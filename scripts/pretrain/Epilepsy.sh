@@ -25,4 +25,5 @@ python -u run.py \
     --learning_rate 0.001 \
     --batch_size 16 \
     --train_epochs 50 \
-    --gpu 0
+    --gpu 0 \
+    --use_norm 0

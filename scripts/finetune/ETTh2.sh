@@ -23,7 +23,7 @@ for pred_len in 96 192 336 720; do
         --dropout 0.4 \
         --head_dropout 0.1 \
         --batch_size 16 \
-        --gpu 1 \
+        --gpu 0 \
         --lr_decay 0.5 \
         --lradj decay \
         --time_steps 1000 \

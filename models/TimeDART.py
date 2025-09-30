@@ -109,6 +109,21 @@ class Model(nn.Module):
         #     kernel_size=3,
         # )
 
+        # Create shared MLP for both pretrain and forecast
+        patch_input_size = self.seq_len * self.patch_len  # seq_len * patch_len
+        hidden_dim = 512
+
+        self.shared_mlp = nn.Sequential(
+            nn.Linear(patch_input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, patch_input_size)  # For pretrain: reconstruct patches
+        )
+
+        # Add forecasting head
+        self.forecast_head = nn.Linear(hidden_dim, self.pred_len)
+
         # Decoder
         if self.task_name == "pretrain":
             self.denoising_patch_decoder = DenoisingPatchDecoder(
@@ -160,41 +175,58 @@ class Model(nn.Module):
         x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
 
         # For Casual Transformer
-        x_embedding = self.enc_embedding(
-            x_patch
-        )  # [batch_size * num_features, seq_len, d_model]
-        x_embedding_bias = self.add_sos_token_and_drop_last(
-            x_embedding
-        )  # [batch_size * num_features, seq_len, d_model]
-        x_embedding_bias = self.positional_encoding(x_embedding_bias)
-        x_out = self.encoder(
-            x_embedding_bias,
-            is_mask=True,
-        )  # [batch_size * num_features, seq_len, d_model]
+        # x_embedding = self.enc_embedding(
+        #     x_patch
+        # )  # [batch_size * num_features, seq_len, d_model]
+        # x_embedding_bias = self.add_sos_token_and_drop_last(
+        #     x_embedding
+        # )  # [batch_size * num_features, seq_len, d_model]
+        # x_embedding_bias = self.positional_encoding(x_embedding_bias)
+        # x_out = self.encoder(
+        #     x_embedding_bias,
+        #     is_mask=True,
+        # )  # [batch_size * num_features, seq_len, d_model]
 
-        # Noising Diffusion
-        noise_x_patch, noise, t = self.diffusion(
-            x_patch
-        )  # [batch_size * num_features, seq_len, patch_len]
-        noise_x_embedding = self.enc_embedding(
-            noise_x_patch
-        )  # [batch_size * num_features, seq_len, d_model]
-        noise_x_embedding = self.positional_encoding(noise_x_embedding)
+        # # Noising Diffusion
+        # noise_x_patch, noise, t = self.diffusion(
+        #     x_patch
+        # )  # [batch_size * num_features, seq_len, patch_len]
+        # noise_x_embedding = self.enc_embedding(
+        #     noise_x_patch
+        # )  # [batch_size * num_features, seq_len, d_model]
+        # noise_x_embedding = self.positional_encoding(noise_x_embedding)
 
-        # For Denoising Patch Decoder
-        predict_x = self.denoising_patch_decoder(
-            query=noise_x_embedding,
-            key=x_out,
-            value=x_out,
-            is_tgt_mask=True,
-            is_src_mask=True,
-        )  # [batch_size * num_features, seq_len, d_model]
+        # # For Denoising Patch Decoder
+        # predict_x = self.denoising_patch_decoder(
+        #     query=noise_x_embedding,
+        #     key=x_out,
+        #     value=x_out,
+        #     is_tgt_mask=True,
+        #     is_src_mask=True,
+        # )  # [batch_size * num_features, seq_len, d_model]
 
-        # For Decoder
-        predict_x = predict_x.reshape(
-            batch_size, num_features, -1, self.d_model
-        )  # [batch_size, num_features, seq_len, d_model]
-        predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+        # # For Decoder
+        # predict_x = predict_x.reshape(
+        #     batch_size, num_features, -1, self.d_model
+        # )  # [batch_size, num_features, seq_len, d_model]
+        # predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+
+        # Simple MLP
+        x_patch_flat = x_patch.view(x_patch.size(0), -1)  # [batch_size * num_features, seq_len * patch_len]
+
+
+        # Process through MLP
+        predict_x_flat = self.shared_mlp(x_patch_flat)  # [batch_size * num_features, seq_len * patch_len]
+
+
+        # Reshape back to patch format then to final output format
+        predict_x_patch = predict_x_flat.view(x_patch.size())  # [batch_size * num_features, seq_len, patch_len]
+        
+        # Reconstruct original format (unpatch)
+        predict_x = predict_x_patch.view(batch_size, num_features, -1)  # [batch_size, num_features, seq_len * patch_len]
+        # Trim to input_len if needed
+        predict_x = predict_x[:, :, :input_len]  # [batch_size, num_features, input_len]
+        predict_x = predict_x.permute(0, 2, 1)  # [batch_size, input_len, num_features]
 
         # Instance Denormalization
         if self.use_norm:
@@ -213,24 +245,29 @@ class Model(nn.Module):
             means = torch.mean(x, dim=1, keepdim=True).detach()
             x = x - means
             stdevs = torch.sqrt(
-            torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
+                torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
             ).detach()
             x = x / stdevs
 
+        # Channel Independence
         x = self.channel_independence(x)  # [batch_size * num_features, input_len, 1]
-        x = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
-        x = self.enc_embedding(x)  # [batch_size * num_features, seq_len, d_model]
-        x = self.positional_encoding(x)  # [batch_size * num_features, seq_len, d_model]
-        x = self.encoder(
-            x,
-            is_mask=False,
-        )  # [batch_size * num_features, seq_len, d_model]
-        x = x.reshape(
-            batch_size, num_features, -1, self.d_model
-        )  # [batch_size, num_features, seq_len, d_model]
+        # Patch
+        x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
 
-        # forecast
-        x = self.head(x)  # [bs, pred_len, n_vars]
+        # Simple MLP for forecasting
+        x_patch_flat = x_patch.view(x_patch.size(0), -1)  # [batch_size * num_features, seq_len * patch_len]
+
+        # Use the first two layers of the shared MLP (feature extraction)
+        features = x_patch_flat
+        for layer in self.shared_mlp[:3]:  # First Linear + ReLU + Second Linear
+            features = layer(features)
+        
+        # Use forecasting head for final prediction
+        pred_per_feature = self.forecast_head(features)  # [batch_size * num_features, pred_len]
+        
+        # Reshape to final format
+        x = pred_per_feature.view(batch_size, num_features, self.pred_len)  # [batch_size, num_features, pred_len]
+        x = x.permute(0, 2, 1)  # [batch_size, pred_len, num_features]
 
         # denormalization
         if self.use_norm:
@@ -311,31 +348,45 @@ class ClsModel(nn.Module):
         # )
 
         # Decoder
-        if self.task_name == "pretrain":
-            self.denoising_patch_decoder = DenoisingPatchDecoder(
-                d_model=args.d_model,
-                num_layers=args.d_layers,
-                num_heads=args.n_heads,
-                feedforward_dim=args.d_ff,
-                dropout=args.dropout,
-                mask_ratio=args.mask_ratio,
-            )
+        # if self.task_name == "pretrain":
+        #     self.denoising_patch_decoder = DenoisingPatchDecoder(
+        #         d_model=args.d_model,
+        #         num_layers=args.d_layers,
+        #         num_heads=args.n_heads,
+        #         feedforward_dim=args.d_ff,
+        #         dropout=args.dropout,
+        #         mask_ratio=args.mask_ratio,
+        #     )
 
-            self.projection = ClsFlattenHead(
-                seq_len=self.seq_len,
-                d_model=self.d_model,
-                pred_len=args.input_len,
-                num_features=args.c_out,
-                dropout=args.head_dropout,
-            )
+        #     self.projection = ClsFlattenHead(
+        #         seq_len=self.seq_len,
+        #         d_model=self.d_model,
+        #         pred_len=args.input_len,
+        #         num_features=args.c_out,
+        #         dropout=args.head_dropout,
+        #     )
 
-        elif self.task_name == "finetune":
-            self.head = OldClsHead(
-                seq_len=self.seq_len,
-                d_model=args.d_model,
-                num_classes=args.num_classes,
-                dropout=args.head_dropout,
-            )
+        # elif self.task_name == "finetune":
+        #     self.head = OldClsHead(
+        #         seq_len=self.seq_len,
+        #         d_model=args.d_model,
+        #         num_classes=args.num_classes,
+        #         dropout=args.head_dropout,
+        #     )
+        # Create shared MLP for both pretrain and forecast
+        input_size = args.input_len * args.enc_in  # input_len * num_features
+        hidden_dim = 512
+
+        self.shared_mlp = nn.Sequential(
+            nn.Linear(input_size, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_size)  # For pretrain: reconstruct input
+        )
+
+        # Add classification head for forecast
+        self.cls_head = nn.Linear(hidden_dim, args.num_classes)
 
     def pretrain(self, x):
         # [batch_size, input_len, num_features]
@@ -351,38 +402,53 @@ class ClsModel(nn.Module):
         # x = x / stdevs  # [batch_size, input_len, num_features]
 
         # For Casual Transformer
-        x_embedding = self.enc_embedding(
-            x
-        )  # [batch_size, seq_len, d_model]
-        x_embedding_bias = self.add_sos_token_and_drop_last(
-            x_embedding
-        )  # [batch_size, seq_len, d_model]
-        x_embedding_bias = self.positional_encoding(x_embedding_bias)
-        x_out = self.encoder(
-            x_embedding_bias,
-            is_mask=True,
-        )  # [batch_size, seq_len, d_model]
+        # x_embedding = self.enc_embedding(
+        #     x
+        # )  # [batch_size, seq_len, d_model]
+        # x_embedding_bias = self.add_sos_token_and_drop_last(
+        #     x_embedding
+        # )  # [batch_size, seq_len, d_model]
+        # x_embedding_bias = self.positional_encoding(x_embedding_bias)
+        # x_out = self.encoder(
+        #     x_embedding_bias,
+        #     is_mask=True,
+        # )  # [batch_size, seq_len, d_model]
 
-        # Noising Diffusion
-        noise_x_patch, noise, t = self.diffusion(
-            x
-        )  # [batch_size, seq_len, patch_len]
-        noise_x_embedding = self.enc_embedding(
-            noise_x_patch
-        )  # [batch_size, seq_len, d_model]
-        noise_x_embedding = self.positional_encoding(noise_x_embedding)
+        # # Noising Diffusion
+        # noise_x_patch, noise, t = self.diffusion(
+        #     x
+        # )  # [batch_size, seq_len, patch_len]
+        # noise_x_embedding = self.enc_embedding(
+        #     noise_x_patch
+        # )  # [batch_size, seq_len, d_model]
+        # noise_x_embedding = self.positional_encoding(noise_x_embedding)
 
-        # For Denoising Patch Decoder
-        predict_x = self.denoising_patch_decoder(
-            query=noise_x_embedding,
-            key=x_out,
-            value=x_out,
-            is_tgt_mask=True,
-            is_src_mask=True,
-        )  # [batch_size, seq_len, d_model]
+        # # For Denoising Patch Decoder
+        # predict_x = self.denoising_patch_decoder(
+        #     query=noise_x_embedding,
+        #     key=x_out,
+        #     value=x_out,
+        #     is_tgt_mask=True,
+        #     is_src_mask=True,
+        # )  # [batch_size, seq_len, d_model]
 
-        # For Decoder
-        predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+        # # For Decoder
+        # predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+
+        # Simple MLP
+        # [batch_size, input_len, num_features]
+        batch_size, input_len, num_features = x.size()
+        
+        # Flatten input for MLP processing
+        x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
+
+        # Process through shared MLP
+        predict_x_flat = self.shared_mlp(x_flat)  # [batch_size, input_len * num_features]
+
+        # Reshape to final output format
+        predict_x = predict_x_flat.view(batch_size, input_len, num_features)  # [batch_size, input_len, num_features]
+
+        return predict_x
 
         # Instance Denormalization
         # predict_x = predict_x * (stdevs[:, 0, :].unsqueeze(1)).repeat(
@@ -392,7 +458,7 @@ class ClsModel(nn.Module):
         #     1, input_len, 1
         # )  # [batch_size, input_len, num_features]
 
-        return predict_x
+        # return predict_x
 
     def forecast(self, x):
         # batch_size, _, num_features = x.size()
@@ -403,14 +469,19 @@ class ClsModel(nn.Module):
         # ).detach()
         # x = x / stdevs
 
-        x = self.enc_embedding(x)  # [batch_size, seq_len, d_model]
-        x = self.positional_encoding(x)  # [batch_size, seq_len, d_model]
-        x = self.encoder(
-            x,
-            is_mask=False,
-        )  # [batch_size, seq_len, d_model]
-        # forecast
-        x = self.head(x)  # [bs, num_classes]
+        batch_size, input_len, num_features = x.size()
+        
+        # Flatten input for MLP processing
+
+        x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
+
+        # Use the first two layers of the shared MLP (feature extraction)
+        features = x_flat
+        for layer in self.shared_mlp[:3]:  # First Linear + ReLU + Second Linear
+            features = layer(features)
+        
+        # Use classification head for final prediction
+        x = self.cls_head(features)  # [batch_size, num_classes]
 
         return x
     

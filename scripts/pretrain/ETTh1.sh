@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/ETT-small/ \
     --data_path ETTh1.csv \
     --model_id ETTh1 \
-    --model SimMTM \
+    --model TimeDART \
     --data ETTh1 \
     --features M \
     --input_len 336 \
@@ -24,5 +24,5 @@ python -u run.py \
     --lr_decay 0.9 \
     --learning_rate 0.0001 \
     --batch_size 16 \
-    --train_epochs 50 \
+    --train_epochs 2 \
     --gpu 0

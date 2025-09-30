@@ -97,7 +97,7 @@ class Exp_SimMTM(Exp_Basic):
                 'valid_rb_loss': valid_rb_loss,
             }
 
-            self.writer.add_scalars(f"/pretrain_loss", loss_scalar_dict, epoch)
+            self.writer.add_scalars(f"pretrain_loss", loss_scalar_dict, epoch)
 
             # checkpoint saving
             if not min_vali_loss or vali_loss <= min_vali_loss:

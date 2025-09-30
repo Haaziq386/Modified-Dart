@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/traffic/ \
         --data_path traffic.csv \
         --model_id Traffic \
-        --model SimMTM \
+        --model TimeDART \
         --data Traffic \
         --features M \
         --input_len 336 \

@@ -29,4 +29,5 @@ python -u run.py \
     --patience 100 \
     --learning_rate 0.001 \
     --pct_start 0.3 \
-    --train_epochs 100
+    --train_epochs 100 \
+    --use_norm 0

@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/ETT-small/ \
         --data_path ETTh1.csv \
         --model_id ETTh1 \
-        --model SimMTM \
+        --model TimeDART \
         --data ETTh1 \
         --features M \
         --input_len 336 \
@@ -19,6 +19,7 @@ for pred_len in 96 192 336 720; do
         --d_model 32 \
         --d_ff 64 \
         --patch_len 2 \
+        --train_epochs 2 \
         --stride 2 \
         --dropout 0.2 \
         --head_dropout 0.1 \
