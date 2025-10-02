@@ -174,43 +174,6 @@ class Model(nn.Module):
         # Patch
         x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
 
-        # For Casual Transformer
-        # x_embedding = self.enc_embedding(
-        #     x_patch
-        # )  # [batch_size * num_features, seq_len, d_model]
-        # x_embedding_bias = self.add_sos_token_and_drop_last(
-        #     x_embedding
-        # )  # [batch_size * num_features, seq_len, d_model]
-        # x_embedding_bias = self.positional_encoding(x_embedding_bias)
-        # x_out = self.encoder(
-        #     x_embedding_bias,
-        #     is_mask=True,
-        # )  # [batch_size * num_features, seq_len, d_model]
-
-        # # Noising Diffusion
-        # noise_x_patch, noise, t = self.diffusion(
-        #     x_patch
-        # )  # [batch_size * num_features, seq_len, patch_len]
-        # noise_x_embedding = self.enc_embedding(
-        #     noise_x_patch
-        # )  # [batch_size * num_features, seq_len, d_model]
-        # noise_x_embedding = self.positional_encoding(noise_x_embedding)
-
-        # # For Denoising Patch Decoder
-        # predict_x = self.denoising_patch_decoder(
-        #     query=noise_x_embedding,
-        #     key=x_out,
-        #     value=x_out,
-        #     is_tgt_mask=True,
-        #     is_src_mask=True,
-        # )  # [batch_size * num_features, seq_len, d_model]
-
-        # # For Decoder
-        # predict_x = predict_x.reshape(
-        #     batch_size, num_features, -1, self.d_model
-        # )  # [batch_size, num_features, seq_len, d_model]
-        # predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
-
         # Simple MLP
         x_patch_flat = x_patch.view(x_patch.size(0), -1)  # [batch_size * num_features, seq_len * patch_len]
 
@@ -375,18 +338,40 @@ class ClsModel(nn.Module):
         #     )
         # Create shared MLP for both pretrain and forecast
         input_size = args.input_len * args.enc_in  # input_len * num_features
-        hidden_dim = 512
 
-        self.shared_mlp = nn.Sequential(
-            nn.Linear(input_size, hidden_dim),
+        self.shared_layers = nn.Sequential(
+            nn.Linear(input_size, 1024),
+            nn.BatchNorm1d(1024),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Dropout(self.dropout),
+            
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Linear(hidden_dim, input_size)  # For pretrain: reconstruct input
+            nn.Dropout(self.dropout),
+            
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(self.dropout),
         )
-
+        if self.task_name == "pretrain":
+            self.reconstruction_head = nn.Sequential(
+                nn.Linear(256, 512),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+                nn.Linear(512, input_size)
+            )
+        else:
+            self.cls_head = nn.Sequential(
+                nn.Linear(256, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(self.dropout),
+                nn.Linear(128, args.num_classes)
+            )
         # Add classification head for forecast
-        self.cls_head = nn.Linear(hidden_dim, args.num_classes)
+        # self.cls_head = nn.Linear(1024, args.num_classes)
 
     def pretrain(self, x):
         # [batch_size, input_len, num_features]
@@ -401,40 +386,6 @@ class ClsModel(nn.Module):
         # ).detach()  # [batch_size, 1, num_features]
         # x = x / stdevs  # [batch_size, input_len, num_features]
 
-        # For Casual Transformer
-        # x_embedding = self.enc_embedding(
-        #     x
-        # )  # [batch_size, seq_len, d_model]
-        # x_embedding_bias = self.add_sos_token_and_drop_last(
-        #     x_embedding
-        # )  # [batch_size, seq_len, d_model]
-        # x_embedding_bias = self.positional_encoding(x_embedding_bias)
-        # x_out = self.encoder(
-        #     x_embedding_bias,
-        #     is_mask=True,
-        # )  # [batch_size, seq_len, d_model]
-
-        # # Noising Diffusion
-        # noise_x_patch, noise, t = self.diffusion(
-        #     x
-        # )  # [batch_size, seq_len, patch_len]
-        # noise_x_embedding = self.enc_embedding(
-        #     noise_x_patch
-        # )  # [batch_size, seq_len, d_model]
-        # noise_x_embedding = self.positional_encoding(noise_x_embedding)
-
-        # # For Denoising Patch Decoder
-        # predict_x = self.denoising_patch_decoder(
-        #     query=noise_x_embedding,
-        #     key=x_out,
-        #     value=x_out,
-        #     is_tgt_mask=True,
-        #     is_src_mask=True,
-        # )  # [batch_size, seq_len, d_model]
-
-        # # For Decoder
-        # predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
-
         # Simple MLP
         # [batch_size, input_len, num_features]
         batch_size, input_len, num_features = x.size()
@@ -442,8 +393,9 @@ class ClsModel(nn.Module):
         # Flatten input for MLP processing
         x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
 
+        features = self.shared_layers(x_flat)
         # Process through shared MLP
-        predict_x_flat = self.shared_mlp(x_flat)  # [batch_size, input_len * num_features]
+        predict_x_flat = self.reconstruction_head(features)  # [batch_size, input_len * num_features]
 
         # Reshape to final output format
         predict_x = predict_x_flat.view(batch_size, input_len, num_features)  # [batch_size, input_len, num_features]
@@ -472,13 +424,10 @@ class ClsModel(nn.Module):
         batch_size, input_len, num_features = x.size()
         
         # Flatten input for MLP processing
-
         x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
 
         # Use the first two layers of the shared MLP (feature extraction)
-        features = x_flat
-        for layer in self.shared_mlp[:3]:  # First Linear + ReLU + Second Linear
-            features = layer(features)
+        features = self.shared_layers(x_flat)
         
         # Use classification head for final prediction
         x = self.cls_head(features)  # [batch_size, num_classes]
