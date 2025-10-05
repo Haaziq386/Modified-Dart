@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from layers.Transformer_EncDec import Decoder, DecoderLayer, Encoder, EncoderLayer
 from layers.TimeDART_EncDec import (
     ChannelIndependence,
@@ -15,6 +16,176 @@ from layers.TimeDART_EncDec import (
     ARFlattenHead,
 )
 from layers.Embed import Patch, PatchEmbedding, PositionalEncoding, TokenEmbedding_TimeDART
+
+def crop_or_pad(x, target_len):
+    """Crop or pad x along the last dimension to match target_len."""
+    current_len = x.size(-1)
+    if current_len > target_len:
+        x = x[..., :target_len]
+    elif current_len < target_len:
+        pad_size = target_len - current_len
+        x = F.pad(x, (0, pad_size))
+    return x
+
+class UNet1D(nn.Module):
+    """
+    1D U-Net for time series data - works for both forecasting and classification
+    """
+    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, num_classes=2):
+        super(UNet1D, self).__init__()
+        self.task_name = task_name
+        self.pred_len = pred_len
+        self.num_classes = num_classes
+        
+        # Encoder (Downsampling path)
+        # Block 1: input_len -> input_len/2
+        self.e11 = nn.Conv1d(in_channels, 64, kernel_size=3, padding=1)  # [batch, in_channels, seq_len] -> [batch, 64, seq_len]
+        self.e12 = nn.Conv1d(64, 64, kernel_size=3, padding=1)  # [batch, 64, seq_len] -> [batch, 64, seq_len]
+        self.pool1 = nn.MaxPool1d(kernel_size=2, stride=2)  # [batch, 64, seq_len] -> [batch, 64, seq_len/2]
+
+        # Block 2: seq_len/2 -> seq_len/4
+        self.e21 = nn.Conv1d(64, 128, kernel_size=3, padding=1)  # [batch, 64, seq_len/2] -> [batch, 128, seq_len/2]
+        self.e22 = nn.Conv1d(128, 128, kernel_size=3, padding=1)  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/2]
+        self.pool2 = nn.MaxPool1d(kernel_size=2, stride=2)  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/4]
+
+        # Block 3: seq_len/4 -> seq_len/8
+        self.e31 = nn.Conv1d(128, 256, kernel_size=3, padding=1)  # [batch, 128, seq_len/4] -> [batch, 256, seq_len/4]
+        self.e32 = nn.Conv1d(256, 256, kernel_size=3, padding=1)  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/4]
+        self.pool3 = nn.MaxPool1d(kernel_size=2, stride=2)  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/8]
+
+        # Block 4: seq_len/8 -> seq_len/16
+        self.e41 = nn.Conv1d(256, 512, kernel_size=3, padding=1)  # [batch, 256, seq_len/8] -> [batch, 512, seq_len/8]
+        self.e42 = nn.Conv1d(512, 512, kernel_size=3, padding=1)  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/8]
+        self.pool4 = nn.MaxPool1d(kernel_size=2, stride=2)  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/16]
+
+        # Bottleneck
+        self.e51 = nn.Conv1d(512, 1024, kernel_size=3, padding=1)  # [batch, 512, seq_len/16] -> [batch, 1024, seq_len/16]
+        self.e52 = nn.Conv1d(1024, 1024, kernel_size=3, padding=1)  # [batch, 1024, seq_len/16] -> [batch, 1024, seq_len/16]
+
+        # Task-specific heads
+        if self.task_name == "pretrain":
+            # Decoder (Upsampling path) for reconstruction
+            self.upconv1 = nn.ConvTranspose1d(1024, 512, kernel_size=2, stride=2)  # [batch, 1024, seq_len/16] -> [batch, 512, seq_len/8]
+            self.d11 = nn.Conv1d(1024, 512, kernel_size=3, padding=1)  # [batch, 1024, seq_len/8] -> [batch, 512, seq_len/8]
+            self.d12 = nn.Conv1d(512, 512, kernel_size=3, padding=1)  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/8]
+
+            self.upconv2 = nn.ConvTranspose1d(512, 256, kernel_size=2, stride=2)  # [batch, 512, seq_len/8] -> [batch, 256, seq_len/4]
+            self.d21 = nn.Conv1d(512, 256, kernel_size=3, padding=1)  # [batch, 512, seq_len/4] -> [batch, 256, seq_len/4]
+            self.d22 = nn.Conv1d(256, 256, kernel_size=3, padding=1)  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/4]
+
+            self.upconv3 = nn.ConvTranspose1d(256, 128, kernel_size=2, stride=2)  # [batch, 256, seq_len/4] -> [batch, 128, seq_len/2]
+            self.d31 = nn.Conv1d(256, 128, kernel_size=3, padding=1)  # [batch, 256, seq_len/2] -> [batch, 128, seq_len/2]
+            self.d32 = nn.Conv1d(128, 128, kernel_size=3, padding=1)  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/2]
+
+            self.upconv4 = nn.ConvTranspose1d(128, 64, kernel_size=2, stride=2)  # [batch, 128, seq_len/2] -> [batch, 64, seq_len]
+            self.d41 = nn.Conv1d(128, 64, kernel_size=3, padding=1)  # [batch, 128, seq_len] -> [batch, 64, seq_len]
+            self.d42 = nn.Conv1d(64, 64, kernel_size=3, padding=1)  # [batch, 64, seq_len] -> [batch, 64, seq_len]
+
+            # Output layer for reconstruction
+            self.outconv = nn.Conv1d(64, out_channels, kernel_size=1)  # [batch, 64, seq_len] -> [batch, out_channels, seq_len]
+        
+        elif self.task_name == "finetune" and self.pred_len is not None:
+            # Forecasting head
+            self.global_pool = nn.AdaptiveAvgPool1d(1)  # [batch, 1024, seq_len/16] -> [batch, 1024, 1]
+            self.forecast_head = nn.Sequential(
+                nn.Linear(1024, 512),  # [batch, 1024] -> [batch, 512]
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(512, 256),  # [batch, 512] -> [batch, 256]
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(256, self.pred_len * out_channels)  # [batch, 256] -> [batch, pred_len * out_channels]
+            )
+        
+        else:
+            # Classification head
+            self.global_pool = nn.AdaptiveAvgPool1d(1)  # [batch, 1024, seq_len/16] -> [batch, 1024, 1]
+            self.classifier = nn.Sequential(
+                nn.Linear(1024, 512),  # [batch, 1024] -> [batch, 512]
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(512, 256),  # [batch, 512] -> [batch, 256]
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(256, self.num_classes)  # [batch, 256] -> [batch, num_classes]
+            )
+
+    def forward(self, x):
+        # Input: [batch_size, seq_len, num_features]
+        # Transpose for conv1d: [batch_size, num_features, seq_len]
+        batch_size, seq_len, num_features = x.size()
+        x = x.transpose(1, 2)
+        
+        # Encoder
+        xe11 = F.relu(self.e11(x))  # [batch, num_features, seq_len] -> [batch, 64, seq_len]
+        xe12 = F.relu(self.e12(xe11))  # [batch, 64, seq_len] -> [batch, 64, seq_len]
+        xp1 = self.pool1(xe12)  # [batch, 64, seq_len] -> [batch, 64, seq_len/2]
+
+        xe21 = F.relu(self.e21(xp1))  # [batch, 64, seq_len/2] -> [batch, 128, seq_len/2]
+        xe22 = F.relu(self.e22(xe21))  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/2]
+        xp2 = self.pool2(xe22)  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/4]
+
+        xe31 = F.relu(self.e31(xp2))  # [batch, 128, seq_len/4] -> [batch, 256, seq_len/4]
+        xe32 = F.relu(self.e32(xe31))  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/4]
+        xp3 = self.pool3(xe32)  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/8]
+
+        xe41 = F.relu(self.e41(xp3))  # [batch, 256, seq_len/8] -> [batch, 512, seq_len/8]
+        xe42 = F.relu(self.e42(xe41))  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/8]
+        xp4 = self.pool4(xe42)  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/16]
+
+        # Bottleneck
+        xe51 = F.relu(self.e51(xp4))  # [batch, 512, seq_len/16] -> [batch, 1024, seq_len/16]
+        xe52 = F.relu(self.e52(xe51))  # [batch, 1024, seq_len/16] -> [batch, 1024, seq_len/16]
+        
+        if self.task_name == "pretrain":
+            # Decoder with skip connections
+            xu1 = self.upconv1(xe52)  # [batch, 1024, seq_len/16] -> [batch, 512, seq_len/8]
+            xu1 = crop_or_pad(xu1, xe42.size(-1))  # Ensure same length
+            xu11 = torch.cat([xu1, xe42], dim=1)  # [batch, 1024, seq_len/8]
+            xd11 = F.relu(self.d11(xu11))  # [batch, 1024, seq_len/8] -> [batch, 512, seq_len/8]
+            xd12 = F.relu(self.d12(xd11))  # [batch, 512, seq_len/8] -> [batch, 512, seq_len/8]
+
+            xu2 = self.upconv2(xd12)  # [batch, 512, seq_len/8] -> [batch, 256, seq_len/4]
+            xu2 = crop_or_pad(xu2, xe32.size(-1))  # Ensure same length
+            xu22 = torch.cat([xu2, xe32], dim=1)  # [batch, 512, seq_len/4]
+            xd21 = F.relu(self.d21(xu22))  # [batch, 512, seq_len/4] -> [batch, 256, seq_len/4]
+            xd22 = F.relu(self.d22(xd21))  # [batch, 256, seq_len/4] -> [batch, 256, seq_len/4]
+
+            xu3 = self.upconv3(xd22)  # [batch, 256, seq_len/4] -> [batch, 128, seq_len/2]
+            xu3 = crop_or_pad(xu3, xe22.size(-1))  # Ensure same length
+            xu33 = torch.cat([xu3, xe22], dim=1)  # [batch, 256, seq_len/2]
+            xd31 = F.relu(self.d31(xu33))  # [batch, 256, seq_len/2] -> [batch, 128, seq_len/2]
+            xd32 = F.relu(self.d32(xd31))  # [batch, 128, seq_len/2] -> [batch, 128, seq_len/2]
+
+            xu4 = self.upconv4(xd32)  # [batch, 128, seq_len/2] -> [batch, 64, seq_len]
+            xu4 = crop_or_pad(xu4, xe12.size(-1))
+            xu44 = torch.cat([xu4, xe12], dim=1)  # [batch, 128, seq_len]
+            xd41 = F.relu(self.d41(xu44))  # [batch, 128, seq_len] -> [batch, 64, seq_len]
+            xd42 = F.relu(self.d42(xd41))  # [batch, 64, seq_len] -> [batch, 64, seq_len]
+
+            # Output layer
+            out = self.outconv(xd42)  # [batch, 64, seq_len] -> [batch, num_features, seq_len]
+            
+            # Transpose back to original format: [batch_size, seq_len, num_features]
+            out = out.transpose(1, 2)
+            return out
+            
+        elif self.task_name == "finetune" and self.pred_len is not None:
+            # Forecasting
+            pooled = self.global_pool(xe52)  # [batch, 1024, seq_len/16] -> [batch, 1024, 1]
+            pooled = pooled.squeeze(-1)  # [batch, 1024, 1] -> [batch, 1024]
+            out = self.forecast_head(pooled)  # [batch, 1024] -> [batch, pred_len * num_features]
+            
+            # Reshape to [batch_size, pred_len, num_features]
+            out = out.view(batch_size, self.pred_len, num_features)
+            return out
+            
+        else:  # Classification
+            # Global pooling and classification
+            pooled = self.global_pool(xe52)  # [batch, 1024, seq_len/16] -> [batch, 1024, 1]
+            pooled = pooled.squeeze(-1)  # [batch, 1024, 1] -> [batch, 1024]
+            out = self.classifier(pooled)  # [batch, 1024] -> [batch, num_classes]
+            return out
 
 
 class FlattenHead(nn.Module):
@@ -45,119 +216,30 @@ class FlattenHead(nn.Module):
 
 class Model(nn.Module):
     """
-    TimeDART
+    TimeDART with U-Net architecture
     """
 
     def __init__(self, args):
         super(Model, self).__init__()
         self.input_len = args.input_len
-
-        # For Model Hyperparameters
-        self.d_model = args.d_model
-        self.num_heads = args.n_heads
-        self.feedforward_dim = args.d_ff
-        self.dropout = args.dropout
-        self.device = args.device
-        self.task_name = args.task_name
         self.pred_len = args.pred_len
+        self.task_name = args.task_name
         self.use_norm = args.use_norm
-        self.channel_independence = ChannelIndependence()
-
-        # Patch
-        self.patch_len = args.patch_len
-        self.stride = args.stride
-        self.patch = Patch(
-            patch_len=self.patch_len,
-            stride=self.stride,
+        
+        # Initialize UNet with proper parameters
+        self.unet = UNet1D(
+            in_channels=args.enc_in,
+            out_channels=args.enc_in,  # For reconstruction or forecasting same num features
+            task_name=self.task_name,
+            pred_len=self.pred_len if hasattr(args, 'pred_len') else None,
+            num_classes=getattr(args, 'num_classes', 2)
         )
-        self.seq_len = int((self.input_len - self.patch_len) / self.stride) + 1
-
-        # Embedding
-        self.enc_embedding = PatchEmbedding(
-            patch_len=self.patch_len,
-            d_model=self.d_model,
-        )
-
-        self.positional_encoding = PositionalEncoding(
-            d_model=self.d_model,
-            dropout=self.dropout,
-        )
-
-        sos_token = torch.randn(1, 1, self.d_model, device=self.device)
-        self.sos_token = nn.Parameter(sos_token, requires_grad=True)
-
-        self.add_sos_token_and_drop_last = AddSosTokenAndDropLast(
-            sos_token=self.sos_token,
-        )
-
-        # Encoder (Casual Trasnformer)
-        self.diffusion = Diffusion(
-            time_steps=args.time_steps,
-            device=self.device,
-            scheduler=args.scheduler,
-        )
-        self.encoder = CausalTransformer(
-            d_model=args.d_model,
-            num_heads=args.n_heads,
-            feedforward_dim=args.d_ff,
-            dropout=args.dropout,
-            num_layers=args.e_layers,
-        )
-        # self.encoder = DilatedConvEncoder(
-        #     in_channels=self.d_model,
-        #     channels=[self.d_model] * args.e_layers,
-        #     kernel_size=3,
-        # )
-
-        # Create shared MLP for both pretrain and forecast
-        patch_input_size = self.seq_len * self.patch_len  # seq_len * patch_len
-        hidden_dim = 512
-
-        self.shared_mlp = nn.Sequential(
-            nn.Linear(patch_input_size, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, patch_input_size)  # For pretrain: reconstruct patches
-        )
-
-        # Add forecasting head
-        self.forecast_head = nn.Linear(hidden_dim, self.pred_len)
-
-        # Decoder
-        if self.task_name == "pretrain":
-            self.denoising_patch_decoder = DenoisingPatchDecoder(
-                d_model=args.d_model,
-                num_layers=args.d_layers,
-                num_heads=args.n_heads,
-                feedforward_dim=args.d_ff,
-                dropout=args.dropout,
-                mask_ratio=args.mask_ratio,
-            )
-
-            self.projection = FlattenHead(
-                seq_len=self.seq_len,
-                d_model=self.d_model,
-                pred_len=args.input_len,
-                dropout=args.head_dropout,
-            )
-            # self.projection = ARFlattenHead(
-            #     d_model=self.d_model,
-            #     patch_len=self.patch_len,
-            #     dropout=args.head_dropout,
-            # )
-
-        elif self.task_name == "finetune":
-            self.head = FlattenHead(
-                seq_len=self.seq_len,
-                d_model=args.d_model,
-                pred_len=args.pred_len,
-                dropout=args.head_dropout,
-            )
 
     def pretrain(self, x):
         # [batch_size, input_len, num_features]
         batch_size, input_len, num_features = x.size()
+        
+        # Optional normalization
         if self.use_norm:
             # Instance Normalization
             means = torch.mean(
@@ -169,27 +251,8 @@ class Model(nn.Module):
             ).detach()  # [batch_size, 1, num_features]
             x = x / stdevs  # [batch_size, input_len, num_features]
 
-        # Channel Independence
-        x = self.channel_independence(x)  # [batch_size * num_features, input_len, 1]
-        # Patch
-        x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
-
-        # Simple MLP
-        x_patch_flat = x_patch.view(x_patch.size(0), -1)  # [batch_size * num_features, seq_len * patch_len]
-
-
-        # Process through MLP
-        predict_x_flat = self.shared_mlp(x_patch_flat)  # [batch_size * num_features, seq_len * patch_len]
-
-
-        # Reshape back to patch format then to final output format
-        predict_x_patch = predict_x_flat.view(x_patch.size())  # [batch_size * num_features, seq_len, patch_len]
-        
-        # Reconstruct original format (unpatch)
-        predict_x = predict_x_patch.view(batch_size, num_features, -1)  # [batch_size, num_features, seq_len * patch_len]
-        # Trim to input_len if needed
-        predict_x = predict_x[:, :, :input_len]  # [batch_size, num_features, input_len]
-        predict_x = predict_x.permute(0, 2, 1)  # [batch_size, input_len, num_features]
+        # Forward through UNet
+        predict_x = self.unet(x)  # [batch_size, input_len, num_features]
 
         # Instance Denormalization
         if self.use_norm:
@@ -203,49 +266,34 @@ class Model(nn.Module):
         return predict_x
 
     def forecast(self, x):
-        batch_size, _, num_features = x.size()
+        # [batch_size, input_len, num_features]
+        batch_size, input_len, num_features = x.size()
+        
+        # Optional normalization
         if self.use_norm:
-            means = torch.mean(x, dim=1, keepdim=True).detach()
-            x = x - means
+            means = torch.mean(x, dim=1, keepdim=True).detach()  # [batch_size, 1, num_features]
+            x = x - means  # [batch_size, input_len, num_features]
             stdevs = torch.sqrt(
                 torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
-            ).detach()
-            x = x / stdevs
+            ).detach()  # [batch_size, 1, num_features]
+            x = x / stdevs  # [batch_size, input_len, num_features]
 
-        # Channel Independence
-        x = self.channel_independence(x)  # [batch_size * num_features, input_len, 1]
-        # Patch
-        x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
+        # Forward through UNet
+        prediction = self.unet(x)  # [batch_size, pred_len, num_features]
 
-        # Simple MLP for forecasting
-        x_patch_flat = x_patch.view(x_patch.size(0), -1)  # [batch_size * num_features, seq_len * patch_len]
-
-        # Use the first two layers of the shared MLP (feature extraction)
-        features = x_patch_flat
-        for layer in self.shared_mlp[:3]:  # First Linear + ReLU + Second Linear
-            features = layer(features)
-        
-        # Use forecasting head for final prediction
-        pred_per_feature = self.forecast_head(features)  # [batch_size * num_features, pred_len]
-        
-        # Reshape to final format
-        x = pred_per_feature.view(batch_size, num_features, self.pred_len)  # [batch_size, num_features, pred_len]
-        x = x.permute(0, 2, 1)  # [batch_size, pred_len, num_features]
-
-        # denormalization
+        # Denormalization
         if self.use_norm:
-            x = x * (stdevs[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)
-            x = x + (means[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)
+            prediction = prediction * (stdevs[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)  # [batch_size, pred_len, num_features]
+            prediction = prediction + (means[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)  # [batch_size, pred_len, num_features]
 
-        return x
+        return prediction
     
     def forward(self, batch_x):
-
         if self.task_name == "pretrain":
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":
             dec_out = self.forecast(batch_x)
-            return dec_out[:, -self.pred_len: , :]
+            return dec_out  # [batch_size, pred_len, num_features]
         else:
             raise ValueError("task_name should be 'pretrain' or 'finetune'")
 
@@ -254,188 +302,27 @@ class ClsModel(nn.Module):
     def __init__(self, args):
         super(ClsModel, self).__init__()
         self.input_len = args.input_len
-
-        # For Model Hyperparameters
-        self.d_model = args.d_model
-        self.num_heads = args.n_heads
-        self.feedforward_dim = args.d_ff
-        self.dropout = args.dropout
-        self.device = args.device
         self.task_name = args.task_name
         self.num_classes = args.num_classes
-
-        # Patch
-        self.patch_len = args.patch_len
-        self.stride = args.stride
-        self.seq_len = int((self.input_len - self.patch_len) / self.stride) + 2
-        padding = self.seq_len * self.stride - self.input_len
-
-        # Embedding
-        self.enc_embedding = ClsEmbedding(
-            num_features=args.enc_in,
-            d_model=args.d_model,
-            kernel_size=args.patch_len,
-            stride=args.stride,
-            padding=padding,
+        
+        # Initialize UNet with proper parameters
+        self.unet = UNet1D(
+            in_channels=args.enc_in,
+            out_channels=args.enc_in,
+            task_name=self.task_name,
+            pred_len=None,  # Not needed for classification
+            num_classes=self.num_classes
         )
-
-        self.positional_encoding = PositionalEncoding(
-            d_model=self.d_model,
-            dropout=self.dropout,
-        )
-
-        sos_token = torch.randn(1, 1, self.d_model, device=self.device)
-        self.sos_token = nn.Parameter(sos_token, requires_grad=True)
-
-        self.add_sos_token_and_drop_last = AddSosTokenAndDropLast(
-            sos_token=self.sos_token,
-        )
-
-        # Encoder (Casual Trasnformer)
-        self.diffusion = Diffusion(
-            time_steps=args.time_steps,
-            device=self.device,
-            scheduler=args.scheduler,
-        )
-        self.encoder = CausalTransformer(
-            d_model=args.d_model,
-            num_heads=args.n_heads,
-            feedforward_dim=args.d_ff,
-            dropout=args.dropout,
-            num_layers=args.e_layers,
-        )
-        # self.encoder = DilatedConvEncoder(
-        #     in_channels=self.d_model,
-        #     channels=[self.d_model] * args.e_layers,
-        #     kernel_size=3,
-        # )
-
-        # Decoder
-        # if self.task_name == "pretrain":
-        #     self.denoising_patch_decoder = DenoisingPatchDecoder(
-        #         d_model=args.d_model,
-        #         num_layers=args.d_layers,
-        #         num_heads=args.n_heads,
-        #         feedforward_dim=args.d_ff,
-        #         dropout=args.dropout,
-        #         mask_ratio=args.mask_ratio,
-        #     )
-
-        #     self.projection = ClsFlattenHead(
-        #         seq_len=self.seq_len,
-        #         d_model=self.d_model,
-        #         pred_len=args.input_len,
-        #         num_features=args.c_out,
-        #         dropout=args.head_dropout,
-        #     )
-
-        # elif self.task_name == "finetune":
-        #     self.head = OldClsHead(
-        #         seq_len=self.seq_len,
-        #         d_model=args.d_model,
-        #         num_classes=args.num_classes,
-        #         dropout=args.head_dropout,
-        #     )
-        # Create shared MLP for both pretrain and forecast
-        input_size = args.input_len * args.enc_in  # input_len * num_features
-
-        self.shared_layers = nn.Sequential(
-            nn.Linear(input_size, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-            
-            nn.Linear(1024, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-            
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(self.dropout),
-        )
-        if self.task_name == "pretrain":
-            self.reconstruction_head = nn.Sequential(
-                nn.Linear(256, 512),
-                nn.ReLU(),
-                nn.Dropout(self.dropout),
-                nn.Linear(512, input_size)
-            )
-        else:
-            self.cls_head = nn.Sequential(
-                nn.Linear(256, 128),
-                nn.BatchNorm1d(128),
-                nn.ReLU(),
-                nn.Dropout(self.dropout),
-                nn.Linear(128, args.num_classes)
-            )
-        # Add classification head for forecast
-        # self.cls_head = nn.Linear(1024, args.num_classes)
 
     def pretrain(self, x):
         # [batch_size, input_len, num_features]
-        # Instance Normalization
-        # batch_size, input_len, num_features = x.size()
-        # means = torch.mean(
-        #     x, dim=1, keepdim=True
-        # ).detach()  # [batch_size, 1, num_features], detach from gradient
-        # x = x - means  # [batch_size, input_len, num_features]
-        # stdevs = torch.sqrt(
-        #     torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
-        # ).detach()  # [batch_size, 1, num_features]
-        # x = x / stdevs  # [batch_size, input_len, num_features]
-
-        # Simple MLP
-        # [batch_size, input_len, num_features]
-        batch_size, input_len, num_features = x.size()
-        
-        # Flatten input for MLP processing
-        x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
-
-        features = self.shared_layers(x_flat)
-        # Process through shared MLP
-        predict_x_flat = self.reconstruction_head(features)  # [batch_size, input_len * num_features]
-
-        # Reshape to final output format
-        predict_x = predict_x_flat.view(batch_size, input_len, num_features)  # [batch_size, input_len, num_features]
-
-        return predict_x
-
-        # Instance Denormalization
-        # predict_x = predict_x * (stdevs[:, 0, :].unsqueeze(1)).repeat(
-        #     1, input_len, 1
-        # )  # [batch_size, input_len, num_features]
-        # predict_x = predict_x + (means[:, 0, :].unsqueeze(1)).repeat(
-        #     1, input_len, 1
-        # )  # [batch_size, input_len, num_features]
-
-        # return predict_x
+        return self.unet(x)  # [batch_size, input_len, num_features]
 
     def forecast(self, x):
-        # batch_size, _, num_features = x.size()
-        # means = torch.mean(x, dim=1, keepdim=True).detach()
-        # x = x - means
-        # stdevs = torch.sqrt(
-        #     torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
-        # ).detach()
-        # x = x / stdevs
-
-        batch_size, input_len, num_features = x.size()
-        
-        # Flatten input for MLP processing
-        x_flat = x.view(batch_size, -1)  # [batch_size, input_len * num_features]
-
-        # Use the first two layers of the shared MLP (feature extraction)
-        features = self.shared_layers(x_flat)
-        
-        # Use classification head for final prediction
-        x = self.cls_head(features)  # [batch_size, num_classes]
-
-        return x
+        # [batch_size, input_len, num_features]
+        return self.unet(x)  # [batch_size, num_classes]
     
     def forward(self, batch_x):
-
         if self.task_name == "pretrain":
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":

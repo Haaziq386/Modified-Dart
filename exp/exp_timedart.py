@@ -41,9 +41,8 @@ class Exp_TimeDART(Exp_Basic):
             print("Loading ckpt: {}".format(self.args.load_checkpoints))
 
             transfer_device = "cuda:0" if torch.cuda.is_available() else "cpu"
-            model = transfer_weights(
-                self.args.load_checkpoints, model, device=transfer_device
-            )
+            state_dict = torch.load(self.args.load_checkpoints, map_location=transfer_device)
+            model.load_state_dict(state_dict, strict=False)  # strict=False allows missing keys (e.g., head)
 
         if torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!", self.args.device_ids)
@@ -135,33 +134,12 @@ class Exp_TimeDART(Exp_Basic):
                     )
                 )
                 min_vali_loss = vali_loss
-
-                self.encoder_state_dict = OrderedDict()
-                for k, v in self.model.state_dict().items():
-                    if "encoder" in k or "enc_embedding" in k:
-                        if "module." in k:
-                            k = k.replace("module.", "")  # multi-gpu
-                        self.encoder_state_dict[k] = v
-                encoder_ckpt = {
-                    "epoch": epoch,
-                    "model_state_dict": self.encoder_state_dict,
-                }
-                torch.save(encoder_ckpt, os.path.join(path, f"ckpt_best.pth"))
+                # Save the full model state dict
+                torch.save(self.model.state_dict(), os.path.join(path, f"ckpt_best.pth"))
 
             if (epoch + 1) % 10 == 0:
                 print("Saving model at epoch {}...".format(epoch + 1))
-
-                self.encoder_state_dict = OrderedDict()
-                for k, v in self.model.state_dict().items():
-                    if "encoder" in k or "enc_embedding" in k:
-                        if "module." in k:
-                            k = k.replace("module.", "")
-                        self.encoder_state_dict[k] = v
-                encoder_ckpt = {
-                    "epoch": epoch,
-                    "model_state_dict": self.encoder_state_dict,
-                }
-                torch.save(encoder_ckpt, os.path.join(path, f"ckpt{epoch + 1}.pth"))
+                torch.save(self.model.state_dict(), os.path.join(path, f"ckpt{epoch + 1}.pth"))
 
     def pretrain_one_epoch(self, train_loader, model_optim, model_scheduler):
         train_loss = []
