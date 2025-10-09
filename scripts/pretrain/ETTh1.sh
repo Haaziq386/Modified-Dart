@@ -24,5 +24,5 @@ python -u run.py \
     --lr_decay 0.9 \
     --learning_rate 0.0001 \
     --batch_size 16 \
-    --train_epochs 2 \
+    --train_epochs 50 \
     --gpu 0
