@@ -26,5 +26,7 @@ python -u run.py \
     --batch_size 16 \
     --use_noise 1 \
     --noise_level 0.15 \
+    --use_decomposition 1 \
+    --period 24 \
     --train_epochs 50 \
     --gpu 0

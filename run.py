@@ -158,6 +158,12 @@ parser.add_argument("--pct_start", type=float, default=0.3, help="pct_start")
 parser.add_argument("--patch_len", type=int, default=12, help="path length")
 parser.add_argument("--stride", type=int, default=12, help="stride")
 
+# Replace the existing decomposition arguments with:
+parser.add_argument('--use_decomposition', type=int, default=0, 
+                   help='Use seasonal-trend decomposition (0=False, 1=True)')
+parser.add_argument('--period', type=int, default=24, 
+                   help='Seasonal period for decomposition')
+
 # optimization
 parser.add_argument(
     "--num_workers", type=int, default=5, help="data loader num workers"
@@ -239,7 +245,7 @@ Exp = Exp_map[args.model]
 if args.task_name == "pretrain":
     for ii in range(args.itr):
         # setting record of experiments
-        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_ts{}_sc{}".format(
+        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_ts{}_sc{}_decomp{}_per{}".format(
             args.task_name,
             args.model,
             args.data,
@@ -260,6 +266,8 @@ if args.task_name == "pretrain":
             args.learning_rate,
             args.time_steps,
             args.scheduler,
+            args.use_decomposition,
+            args.period,
         )
 
         exp = Exp(args)  # set experiments
@@ -272,7 +280,7 @@ if args.task_name == "pretrain":
 elif args.task_name == "finetune":
     for ii in range(args.itr):
         # setting record of experiments
-        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}".format(
+        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_decomp{}_per{}".format(
             args.task_name,
             args.model,
             args.data,
@@ -291,6 +299,8 @@ elif args.task_name == "finetune":
             args.train_epochs,
             args.batch_size,
             args.learning_rate,
+            args.use_decomposition,
+            args.period,
         )
 
         args.load_checkpoints = os.path.join(

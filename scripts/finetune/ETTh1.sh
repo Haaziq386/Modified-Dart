@@ -31,5 +31,7 @@ for pred_len in 96 192 336 720; do
         --scheduler cosine \
         --patience 3 \
         --learning_rate 0.0001 \
-        --pct_start 0.3
+        --pct_start 0.3 \
+        --use_decomposition 1 \
+        --period 24
 done
