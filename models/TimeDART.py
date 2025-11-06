@@ -34,9 +34,13 @@ class LightweightModel(nn.Module):
             self.decoder = nn.Linear(hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
-            # Forecasting head (builds on shared backbone)
-            self.forecaster = nn.Linear(hidden_dim, pred_len)
-        
+            head_width = min(2048, max(64, 4*int(self.pred_len)))
+
+            self.forecaster = nn.Sequential(
+                nn.Linear(hidden_dim, head_width),
+                nn.Linear(head_width, self.pred_len)
+            )
+   
         else:  # Classification (completely separate Conv architecture)
             # Conv layers ONLY for classification
             self.conv1 = nn.Conv1d(in_channels, 64, kernel_size=5, padding=2)
