@@ -113,7 +113,7 @@ class LightweightModel(nn.Module):
                 return predictions
             
         else:  # Classification - uses Conv architecture
-            # No noise for classification
+            
             x = x.transpose(1, 2)  # [batch, num_features, seq_len]
             
             x = F.relu(self.conv1(x))

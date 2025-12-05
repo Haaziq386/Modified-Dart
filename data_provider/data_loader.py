@@ -193,14 +193,79 @@ class Dataset_Physio(Dataset):
         return len(self.data_x)
 
     def __getitem__(self, item):
-        # Just index the pre-converted tensors
-        # print(self.data_x[item].shape, self.data_y[item].shape)
-        # exit(0)
-        x_mark = torch.zeros(self.data_x[item].shape)
-        y_mark = torch.zeros(self.data_y[item].shape)
-        return self.data_x[item], self.data_y[item], x_mark, y_mark
+        x = self.data_x[item]
 
+        # FIX: ensure [seq_len, features] = [128, 9] made for har.sh
+        if x.shape[0] < x.shape[1]:  
+            # Current is [9,128], swap it
+            x = x.transpose(0, 1)
 
+        y = self.data_y[item]
+        x_mark = torch.zeros(x.shape)
+        y_mark = torch.zeros(y.shape)
+
+        return x, y, x_mark, y_mark
+
+class Dataset_PT_Format(Dataset):
+    """
+    Loader for preprocessed .pt files (EMG, SleepEEG, etc.)
+    Expects train.pt, val.pt, test.pt in root_path
+    """
+    def __init__(self, root_path, flag='train', size=None, features='S', data_path=None, target='OT', scale=False, timeenc=0, freq='h', seasonal_patterns=None):
+        self.root_path = root_path
+        self.flag = flag
+        self.__read_data__()
+
+    def __read_data__(self):
+        # Map flag to filename
+        if self.flag == 'train':
+            file_name = 'train.pt'
+        elif self.flag == 'val':
+            file_name = 'val.pt'
+        elif self.flag == 'test':
+            file_name = 'test.pt'
+        else:
+            raise ValueError(f"Invalid flag: {self.flag}")
+
+        file_path = os.path.join(self.root_path, file_name)
+        data = torch.load(file_path,weights_only=False)
+
+        self.data_x = data['samples']  # Shape: [samples, channels, length]
+        self.data_y = data['labels']   # Shape: [samples]
+
+        # Convert to float tensor if not already
+        if not isinstance(self.data_x, torch.Tensor):
+            self.data_x = torch.from_numpy(self.data_x).float()
+        else:
+            self.data_x = self.data_x.float()
+            
+        if not isinstance(self.data_y, torch.Tensor):
+            self.data_y = torch.from_numpy(self.data_y).long()
+        else:
+            self.data_y = self.data_y.long()
+
+        # TimeDART expects [samples, length, channels]
+        # If the .pt file is [samples, channels, length], we need to transpose
+        if self.data_x.shape[1] < self.data_x.shape[2]: 
+             # Assuming channels < length, e.g. (N, 1, 200) -> (N, 200, 1)
+            self.data_x = self.data_x.permute(0, 2, 1)
+
+        print(f"Loaded {self.flag} set from {file_name}: {self.data_x.shape}")
+
+    def __getitem__(self, index):
+        # Return format: seq_x, seq_y, seq_x_mark, seq_y_mark
+        seq_x = self.data_x[index]
+        seq_y = self.data_y[index]
+        
+        # Dummy marks as these datasets usually don't have timestamps
+        seq_x_mark = torch.zeros((seq_x.shape[0], 1)) 
+        seq_y_mark = torch.zeros((seq_x.shape[0], 1))
+
+        return seq_x, seq_y, seq_x_mark, seq_y_mark
+
+    def __len__(self):
+        return len(self.data_x)
+    
 class Dataset_ETT_hour(Dataset):
     def __init__(self, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
