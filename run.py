@@ -204,8 +204,8 @@ parser.add_argument(
 parser.add_argument(
     "--scheduler", type=str, default="cosine", help="scheduler in diffusion"
 )
-parser.add_argument('--use_noise', type=int, default=0, help='use denoising pretraining')
-parser.add_argument('--noise_level', type=float, default=0.1, help='noise level (fraction of std dev)')
+parser.add_argument('--use_noise', type=int, default=1, help='use denoising pretraining (default: enabled)')
+parser.add_argument('--noise_level', type=float, default=0.15, help='noise level (fraction of std dev)')
 
 parser.add_argument("--lr_decay", type=float, default=0.5, help="learning rate decay")
 parser.add_argument("--mask_ratio", type=float, default=1.0, help="mask ratio")

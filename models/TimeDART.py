@@ -123,13 +123,13 @@ class LightweightModel(nn.Module):
                 self.decoder = nn.Linear(hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
-            if self.use_decomposition:
-                # Separate forecasters for trend and seasonal
-                self.trend_forecaster = nn.Linear(hidden_dim, pred_len)
-                self.seasonal_forecaster = nn.Linear(hidden_dim, pred_len)
-            else:
-                self.forecaster = nn.Linear(hidden_dim, pred_len)
-        
+            head_width = min(2048, max(64, 4*int(self.pred_len)))
+
+            self.forecaster = nn.Sequential(
+                nn.Linear(hidden_dim, head_width),
+                nn.Linear(head_width, self.pred_len)
+            )
+   
         else:  # Classification (completely separate Conv architecture)
             # Conv layers ONLY for classification
             self.conv1 = nn.Conv1d(in_channels, 64, kernel_size=5, padding=2)
@@ -238,9 +238,10 @@ class LightweightModel(nn.Module):
                 predictions = predictions.view(batch_size, num_features, self.pred_len)
                 predictions = predictions.permute(0, 2, 1)
                 return predictions
-        
-        else:  # Classification - unchanged
-            x = x.transpose(1, 2)
+            
+        else:  # Classification - uses Conv architecture
+            
+            x = x.transpose(1, 2)  # [batch, num_features, seq_len]
             
             x = F.relu(self.conv1(x))
             x = self.pool(x)

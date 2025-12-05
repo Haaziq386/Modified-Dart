@@ -1,5 +1,5 @@
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4, PSMSegLoader, \
-    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, Dataset_Physio, Dataset_PEMS, Dataset_Epilepsy
+    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, Dataset_Physio, Dataset_PEMS, Dataset_Epilepsy ,Dataset_PT_Format
 from data_provider.uea import collate_fn
 from torch.utils.data import DataLoader
 
@@ -23,6 +23,11 @@ data_dict = {
     'UEA': UEAloader,
     'HAR': Dataset_Physio,
     'EEG': Dataset_Physio,
+    'EMG': Dataset_PT_Format,
+    'ECG': Dataset_PT_Format,
+    'Gesture': Dataset_PT_Format,
+    'FDA': Dataset_PT_Format,
+    'FDB': Dataset_PT_Format,
     'PEMS03': Dataset_PEMS,
     'PEMS04': Dataset_PEMS,
     'PEMS07': Dataset_PEMS,
