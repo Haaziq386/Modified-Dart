@@ -1,126 +1,37 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from statsmodels.tsa.seasonal import seasonal_decompose
-import pandas as pd
-import numpy as np
 
-class SeasonalTrendDecomposer:
-    """
-    Decompose time series into seasonal and trend components
-    """
-    def __init__(self, period=24, model='additive'):
-        self.period = period
-        self.model = model
-    
-    def decompose(self, x):
-        """
-        x: [batch_size, seq_len, num_features]
-        Returns: trend, seasonal components
-        """
-        batch_size, seq_len, num_features = x.shape
-        trend_components = []
-        seasonal_components = []
-        
-        for b in range(batch_size):
-            batch_trend = []
-            batch_seasonal = []
-
-            for f in range(num_features):
-                series = x[b, :, f].cpu().numpy()
-                
-                # Handle series too short for decomposition
-                if len(series) < 2 * self.period:
-                    # Simple moving average for trend
-                    trend = pd.Series(series).rolling(window=min(self.period, len(series)//2), center=True).mean()
-                    trend = trend.fillna(method='bfill').fillna(method='ffill').values
-                    seasonal = series - trend
-                else:
-                    try:
-                        decomposition = seasonal_decompose(
-                            series, 
-                            model=self.model, 
-                            period=self.period,
-                            extrapolate_trend='freq'
-                        )
-                        trend = decomposition.trend
-                        seasonal = decomposition.seasonal
-                    except:
-                        # Fallback to simple decomposition
-                        trend = pd.Series(series).rolling(window=self.period, center=True).mean()
-                        trend = trend.fillna(method='bfill').fillna(method='ffill').values
-                        seasonal = series - trend
-                
-                batch_trend.append(trend)
-                batch_seasonal.append(seasonal)
-            
-            trend_components.append(batch_trend)
-            seasonal_components.append(batch_seasonal)
-        
-        trend_tensor = torch.tensor(trend_components, dtype=x.dtype, device=x.device)
-        seasonal_tensor = torch.tensor(seasonal_components, dtype=x.dtype, device=x.device)
-        
-        return trend_tensor, seasonal_tensor
 
 class LightweightModel(nn.Module):
     """
-    Lightweight model with seasonal-trend decomposition
+    Lightweight model with shared linear backbone:
+    - MLP backbone for both pretrain and forecasting
+    - Conv layers ONLY for classification task
     """
-    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, 
-                 num_classes=2, input_len=336, use_noise=False, use_decomposition=False, period=24):
+    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, num_classes=2, input_len=336, use_noise=False):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
         self.num_classes = num_classes
         self.input_len = input_len
         self.use_noise = use_noise
-        self.use_decomposition = use_decomposition
-        
-        # Decomposer
-        if self.use_decomposition:
-            self.decomposer = SeasonalTrendDecomposer(period=period)
         
         # SHARED LINEAR BACKBONE for pretrain and forecasting
         hidden_dim = 512
-
-        if self.use_decomposition and (task_name == "pretrain" or (task_name == "finetune" and pred_len is not None)):
-            # Separate backbones for trend and seasonal
-            self.trend_backbone = nn.Sequential(
-                nn.Linear(input_len, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.1)
-            )
-            
-            self.seasonal_backbone = nn.Sequential(
-                nn.Linear(input_len, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.1)
-            )
-        else:
-            # Original shared backbone
-            self.linear_backbone = nn.Sequential(
-                nn.Linear(input_len, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.2),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(0.1)
-            )
+        self.linear_backbone = nn.Sequential(
+            nn.Linear(input_len, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
         
         # Task-specific heads
         if self.task_name == "pretrain":
-            if self.use_decomposition:
-                # Separate decoders for trend and seasonal
-                self.trend_decoder = nn.Linear(hidden_dim, input_len)
-                self.seasonal_decoder = nn.Linear(hidden_dim, input_len)
-            else:
-                self.decoder = nn.Linear(hidden_dim, input_len)
+            # Reconstruction head
+            self.decoder = nn.Linear(hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
             head_width = min(2048, max(64, 4*int(self.pred_len)))
@@ -171,76 +82,38 @@ class LightweightModel(nn.Module):
         # Input: [batch_size, seq_len, num_features]
         batch_size, seq_len, num_features = x.size()
         
-        # For pretrain and forecasting with decomposition
-        if (self.task_name == "pretrain" or (self.task_name == "finetune" and self.pred_len is not None)) and self.use_decomposition:
-            
-            # Decompose into trend and seasonal
-            trend, seasonal = self.decomposer.decompose(x)
-            
-           # Add noise if enabled
-            if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
-                trend, _ = self.add_noise(trend, noise_level=noise_level)
-                seasonal, _ = self.add_noise(seasonal, noise_level=noise_level)
-            
-            # Process trend component
-            trend = trend.permute(0, 2, 1)  # [batch, num_features, seq_len]
-            trend_flat = trend.reshape(batch_size * num_features, seq_len)
-            trend_features = self.trend_backbone(trend_flat)  # [batch*features, hidden_dim]
-            
-            # Process seasonal component
-            seasonal = seasonal.permute(0, 2, 1)  # [batch, num_features, seq_len]
-            seasonal_flat = seasonal.reshape(batch_size * num_features, seq_len)
-            seasonal_features = self.seasonal_backbone(seasonal_flat)  # [batch*features, hidden_dim]
-            
-            if self.task_name == "pretrain":
-                # Reconstruct trend and seasonal separately
-                trend_recon = self.trend_decoder(trend_features)  # [batch*features, seq_len]
-                seasonal_recon = self.seasonal_decoder(seasonal_features)  # [batch*features, seq_len]
-                
-                # Reshape and combine
-                trend_recon = trend_recon.view(batch_size, num_features, seq_len).permute(0, 2, 1)
-                seasonal_recon = seasonal_recon.view(batch_size, num_features, seq_len).permute(0, 2, 1)
-                
-                reconstruction = trend_recon + seasonal_recon
-                return reconstruction
-            
-            else:  # Forecasting
-                # Predict trend and seasonal separately
-                trend_pred = self.trend_forecaster(trend_features)  # [batch*features, pred_len]
-                seasonal_pred = self.seasonal_forecaster(seasonal_features)  # [batch*features, pred_len]
-                
-                # Reshape and combine
-                trend_pred = trend_pred.view(batch_size, num_features, self.pred_len).permute(0, 2, 1)
-                seasonal_pred = seasonal_pred.view(batch_size, num_features, self.pred_len).permute(0, 2, 1)
-                
-                predictions = trend_pred + seasonal_pred
-                return predictions
-            
-        # Original processing (no decomposition or classification)
-        elif self.task_name == "pretrain" or (self.task_name == "finetune" and self.pred_len is not None):
-            # ...existing code for non-decomposition path...
+        # For pretrain and forecasting, use shared linear backbone
+        if self.task_name == "pretrain" or (self.task_name == "finetune" and self.pred_len is not None):
+            # Store clean signal
             x_clean = x.clone()
             
+            # Add noise during pretrain if enabled
             if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
                 x, noise = self.add_noise(x, noise_level=noise_level)
             
-            x = x.permute(0, 2, 1)
-            x_flat = x.reshape(batch_size * num_features, seq_len)
-            features = self.linear_backbone(x_flat)
+            # Process each feature independently with linear backbone
+            x = x.permute(0, 2, 1)  # [batch, num_features, seq_len]
+            x_flat = x.reshape(batch_size * num_features, seq_len)  # [batch*features, seq_len]
+            
+            # Apply shared linear backbone
+            features = self.linear_backbone(x_flat)  # [batch*features, hidden_dim]
             
             if self.task_name == "pretrain":
-                reconstruction = self.decoder(features)
+                # Reconstruction (denoising)
+                reconstruction = self.decoder(features)  # [batch*features, seq_len]
                 reconstruction = reconstruction.view(batch_size, num_features, seq_len)
-                reconstruction = reconstruction.permute(0, 2, 1)
+                reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
                 return reconstruction
-            else:
-                predictions = self.forecaster(features)
+            
+            else:  # Forecasting
+                # Predict future values
+                predictions = self.forecaster(features)  # [batch*features, pred_len]
                 predictions = predictions.view(batch_size, num_features, self.pred_len)
-                predictions = predictions.permute(0, 2, 1)
+                predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
                 return predictions
             
         else:  # Classification - uses Conv architecture
-            
+            # No noise for classification
             x = x.transpose(1, 2)  # [batch, num_features, seq_len]
             
             x = F.relu(self.conv1(x))
@@ -261,7 +134,7 @@ class LightweightModel(nn.Module):
 
 class Model(nn.Module):
     """
-    TimeDART with optional seasonal-trend decomposition
+    TimeDART with shared linear backbone + task-specific heads
     """
     def __init__(self, args):
         super(Model, self).__init__()
@@ -271,8 +144,6 @@ class Model(nn.Module):
         self.use_norm = args.use_norm
         self.use_noise = getattr(args, 'use_noise', False)
         self.noise_level = getattr(args, 'noise_level', 0.1)
-        self.use_decomposition = getattr(args, 'use_decomposition', False)
-        self.period = getattr(args, 'period', 24)
         
         self.model = LightweightModel(
             in_channels=args.enc_in,
@@ -281,9 +152,7 @@ class Model(nn.Module):
             pred_len=self.pred_len if hasattr(args, 'pred_len') else None,
             num_classes=getattr(args, 'num_classes', 2),
             input_len=args.input_len,
-            use_noise=self.use_noise,
-            use_decomposition=self.use_decomposition,
-            period=self.period
+            use_noise=self.use_noise
         )
 
     def pretrain(self, x):
