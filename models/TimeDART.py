@@ -2,6 +2,59 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+class ForgettingMechanisms(nn.Module):
+    """
+    Forgetting mechanisms for neural networks
+    """
+    def __init__(self, hidden_dim, forgetting_type="activation", forgetting_rate=0.1):
+        super(ForgettingMechanisms, self).__init__()
+        self.forgetting_type = forgetting_type
+        self.forgetting_rate = forgetting_rate
+        self.hidden_dim = hidden_dim
+        
+        if forgetting_type == "activation":
+            # Learnable forgetting gates for activations
+            self.forget_gate = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, hidden_dim),
+                nn.Sigmoid()
+            )
+        elif forgetting_type == "weight":
+            # Weight-level forgetting with importance scores
+            self.importance_scores = nn.Parameter(torch.ones(hidden_dim))
+            self.decay_factor = nn.Parameter(torch.tensor(forgetting_rate))
+        elif forgetting_type == "adaptive":
+            # Adaptive forgetting based on gradient magnitude
+            self.forget_threshold = nn.Parameter(torch.tensor(0.5))
+            self.forget_scale = nn.Parameter(torch.tensor(forgetting_rate))
+    
+    def forward(self, x, is_finetune=False):
+        if not is_finetune:
+            return x
+            
+        if self.forgetting_type == "activation":
+            # Activation-level forgetting
+            forget_mask = self.forget_gate(x)
+            # Apply forgetting: multiply by (1 - forget_rate * forget_mask)
+            forget_factor = 1.0 - self.forgetting_rate * forget_mask
+            return x * forget_factor
+            
+        elif self.forgetting_type == "weight":
+            # Weight-level forgetting (applied to features)
+            importance = torch.sigmoid(self.importance_scores)
+            decay = torch.sigmoid(self.decay_factor)
+            forget_factor = importance * (1.0 - decay)
+            return x * forget_factor.unsqueeze(0).unsqueeze(0)
+            
+        elif self.forgetting_type == "adaptive":
+            # Adaptive forgetting based on activation magnitude
+            activation_magnitude = torch.mean(torch.abs(x), dim=1, keepdim=True)
+            forget_prob = torch.sigmoid(self.forget_scale * (activation_magnitude - self.forget_threshold))
+            forget_mask = torch.bernoulli(forget_prob)
+            return x * (1.0 - forget_mask * self.forgetting_rate)
+        
+        return x
 
 class LightweightModel(nn.Module):
     """
@@ -9,13 +62,16 @@ class LightweightModel(nn.Module):
     - MLP backbone for both pretrain and forecasting
     - Conv layers ONLY for classification task
     """
-    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, num_classes=2, input_len=336, use_noise=False):
+    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, 
+                 num_classes=2, input_len=336, use_noise=False, 
+                 use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
         self.num_classes = num_classes
         self.input_len = input_len
         self.use_noise = use_noise
+        self.use_forgetting = use_forgetting
         
         # SHARED LINEAR BACKBONE for pretrain and forecasting
         hidden_dim = 512
@@ -27,6 +83,12 @@ class LightweightModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.1)
         )
+
+        # Forgetting mechanisms (applied after backbone)
+        if self.use_forgetting:
+            self.forgetting_layer = ForgettingMechanisms(
+                hidden_dim, forgetting_type, forgetting_rate
+            )
         
         # Task-specific heads
         if self.task_name == "pretrain":
@@ -36,8 +98,11 @@ class LightweightModel(nn.Module):
         elif self.task_name == "finetune" and self.pred_len is not None:
             head_width = min(2048, max(64, 4*int(self.pred_len)))
 
+            # Enhanced forecasting head with forgetting
             self.forecaster = nn.Sequential(
                 nn.Linear(hidden_dim, head_width),
+                nn.ReLU(),
+                nn.Dropout(0.1),
                 nn.Linear(head_width, self.pred_len)
             )
    
@@ -98,6 +163,11 @@ class LightweightModel(nn.Module):
             # Apply shared linear backbone
             features = self.linear_backbone(x_flat)  # [batch*features, hidden_dim]
             
+            # Apply forgetting mechanisms during finetune
+            if self.use_forgetting:
+                is_finetune = (self.task_name == "finetune")
+                features = self.forgetting_layer(features, is_finetune=is_finetune)
+            
             if self.task_name == "pretrain":
                 # Reconstruction (denoising)
                 reconstruction = self.decoder(features)  # [batch*features, seq_len]
@@ -145,6 +215,11 @@ class Model(nn.Module):
         self.use_noise = getattr(args, 'use_noise', False)
         self.noise_level = getattr(args, 'noise_level', 0.1)
         
+        # Forgetting mechanism parameters
+        self.use_forgetting = getattr(args, 'use_forgetting', False)
+        self.forgetting_type = getattr(args, 'forgetting_type', 'activation')  # 'activation', 'weight', 'adaptive'
+        self.forgetting_rate = getattr(args, 'forgetting_rate', 0.1)
+
         self.model = LightweightModel(
             in_channels=args.enc_in,
             out_channels=args.enc_in,
@@ -152,7 +227,11 @@ class Model(nn.Module):
             pred_len=self.pred_len if hasattr(args, 'pred_len') else None,
             num_classes=getattr(args, 'num_classes', 2),
             input_len=args.input_len,
-            use_noise=self.use_noise
+            use_noise=self.use_noise,
+            use_noise=self.use_noise,
+            use_forgetting=self.use_forgetting,
+            forgetting_type=self.forgetting_type,
+            forgetting_rate=self.forgetting_rate
         )
 
     def pretrain(self, x):

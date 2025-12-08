@@ -213,6 +213,13 @@ parser.add_argument("--mask_ratio", type=float, default=1.0, help="mask ratio")
 # Classification
 parser.add_argument("--num_classes", type=int, default=6, help="number of classes")
 
+# Forgetting mechanisms
+parser.add_argument('--use_forgetting', type=int, default=0, help='use forgetting mechanisms during finetune (0=False, 1=True)')
+parser.add_argument('--forgetting_type', type=str, default='activation', 
+                   help='type of forgetting mechanism, options:[activation, weight, adaptive]')
+parser.add_argument('--forgetting_rate', type=float, default=0.1, 
+                   help='forgetting strength (0.0=no forgetting, 1.0=complete forgetting)')
+
 ## SimMTM 
 # Pre-train
 parser.add_argument('--lm', type=int, default=3, help='average masking length')
@@ -268,6 +275,8 @@ if args.task_name == "pretrain":
             args.scheduler,
             args.use_decomposition,
             args.period,
+            args.use_noise,
+            args.noise_level,
         )
 
         exp = Exp(args)  # set experiments
@@ -301,6 +310,9 @@ elif args.task_name == "finetune":
             args.learning_rate,
             args.use_decomposition,
             args.period,
+            args.use_forgetting,
+            args.forgetting_type,
+            args.forgetting_rate,
         )
 
         args.load_checkpoints = os.path.join(
