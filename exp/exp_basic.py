@@ -1,6 +1,6 @@
 import os
 import torch
-from models import TimeDART, SimMTM, PatchTST, TimeDART_v2
+from models import TimeDART, HtulTS, SimMTM, PatchTST, TimeDART_v2
 
 
 class Exp_Basic(object):
@@ -8,6 +8,7 @@ class Exp_Basic(object):
         self.args = args
         self.model_dict = {
             'TimeDART': TimeDART,
+            'HtulTS': HtulTS,
             'SimMTM': SimMTM,
             'PatchTST': PatchTST,
             'TimeDART_v2': TimeDART_v2

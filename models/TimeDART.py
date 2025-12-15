@@ -1,284 +1,251 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from layers.Transformer_EncDec import Decoder, DecoderLayer, Encoder, EncoderLayer
+from layers.TimeDART_EncDec import (
+    ChannelIndependence,
+    AddSosTokenAndDropLast,
+    CausalTransformer,
+    Diffusion,
+    DenoisingPatchDecoder,
+    DilatedConvEncoder,
+    ClsEmbedding,
+    ClsHead,
+    OldClsHead,
+    ClsFlattenHead,
+    ARFlattenHead,
+)
+from layers.Embed import Patch, PatchEmbedding, PositionalEncoding, TokenEmbedding_TimeDART
 
-class ForgettingMechanisms(nn.Module):
-    """
-    Forgetting mechanisms for neural networks
-    """
-    def __init__(self, hidden_dim, forgetting_type="activation", forgetting_rate=0.1):
-        super(ForgettingMechanisms, self).__init__()
-        self.forgetting_type = forgetting_type
-        self.forgetting_rate = forgetting_rate
-        self.hidden_dim = hidden_dim
-        
-        if forgetting_type == "activation":
-            # Learnable forgetting gates for activations
-            self.forget_gate = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.ReLU(),
-                nn.Linear(hidden_dim // 2, hidden_dim),
-                nn.Sigmoid()
-            )
-        elif forgetting_type == "weight":
-            # Weight-level forgetting with importance scores
-            self.importance_scores = nn.Parameter(torch.ones(hidden_dim))
-            self.decay_factor = nn.Parameter(torch.tensor(forgetting_rate))
-        elif forgetting_type == "adaptive":
-            # Adaptive forgetting based on gradient magnitude
-            self.forget_threshold = nn.Parameter(torch.tensor(0.5))
-            self.forget_scale = nn.Parameter(torch.tensor(forgetting_rate))
-    
-    def forward(self, x, is_finetune=False):
-        if not is_finetune:
-            return x
-            
-        if self.forgetting_type == "activation":
-            # Activation-level forgetting
-            forget_mask = self.forget_gate(x)
-            # Apply forgetting: multiply by (1 - forget_rate * forget_mask)
-            forget_factor = 1.0 - self.forgetting_rate * forget_mask
-            return x * forget_factor
-            
-        elif self.forgetting_type == "weight":
-            # Weight-level forgetting (applied to features)
-            importance = torch.sigmoid(self.importance_scores)
-            decay = torch.sigmoid(self.decay_factor)
-            forget_factor = importance * (1.0 - decay)
-            return x * forget_factor.unsqueeze(0).unsqueeze(0)
-            
-        elif self.forgetting_type == "adaptive":
-            # Adaptive forgetting based on activation magnitude
-            activation_magnitude = torch.mean(torch.abs(x), dim=1, keepdim=True)
-            forget_prob = torch.sigmoid(self.forget_scale * (activation_magnitude - self.forget_threshold))
-            forget_mask = torch.bernoulli(forget_prob)
-            return x * (1.0 - forget_mask * self.forgetting_rate)
-        
-        return x
 
-class LightweightModel(nn.Module):
-    """
-    Lightweight model with shared linear backbone:
-    - MLP backbone for both pretrain and forecasting
-    - Conv layers ONLY for classification task
-    """
-    def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, 
-                 num_classes=2, input_len=336, use_noise=False, 
-                 use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1):
-        super(LightweightModel, self).__init__()
-        self.task_name = task_name
+class FlattenHead(nn.Module):
+    def __init__(
+        self,
+        seq_len: int,
+        d_model: int,
+        pred_len: int,
+        dropout: float,
+    ):
+        super(FlattenHead, self).__init__()
         self.pred_len = pred_len
-        self.num_classes = num_classes
-        self.input_len = input_len
-        self.use_noise = use_noise
-        self.use_forgetting = use_forgetting
-        
-        # SHARED LINEAR BACKBONE for pretrain and forecasting
-        hidden_dim = 512
-        self.linear_backbone = nn.Sequential(
-            nn.Linear(input_len, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1)
-        )
+        self.flatten = nn.Flatten(start_dim=-2)
+        self.forecast_head = nn.Linear(seq_len * d_model, pred_len)
+        self.dropout = nn.Dropout(dropout)
 
-        # Forgetting mechanisms (applied after backbone)
-        if self.use_forgetting:
-            self.forgetting_layer = ForgettingMechanisms(
-                hidden_dim, forgetting_type, forgetting_rate
-            )
-        
-        # Task-specific heads
-        if self.task_name == "pretrain":
-            # Reconstruction head
-            self.decoder = nn.Linear(hidden_dim, input_len)
-        
-        elif self.task_name == "finetune" and self.pred_len is not None:
-            head_width = min(2048, max(64, 4*int(self.pred_len)))
-
-            # Enhanced forecasting head with forgetting
-            self.forecaster = nn.Sequential(
-                nn.Linear(hidden_dim, head_width),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(head_width, self.pred_len)
-            )
-   
-        else:  # Classification (completely separate Conv architecture)
-            # Conv layers ONLY for classification
-            self.conv1 = nn.Conv1d(in_channels, 64, kernel_size=5, padding=2)
-            self.conv2 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
-            self.conv3 = nn.Conv1d(128, 256, kernel_size=3, padding=1)
-            self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
-            self.dropout = nn.Dropout(0.2)
-            
-            # Classifier
-            self.global_pool = nn.AdaptiveAvgPool1d(1)
-            self.classifier = nn.Sequential(
-                nn.Linear(256, 128),
-                nn.ReLU(),
-                nn.Dropout(0.5),
-                nn.Linear(128, num_classes)
-            )
-
-    def add_noise(self, x, noise_level=0.1):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Add Gaussian noise proportional to standard deviation
-        x: [batch, seq_len, features]
-        noise_level: scaling factor for noise (default 0.1 = 10% of std)
+        :param x: [batch_size, num_features, seq_len, d_model]
+        :return: [batch_size, pred_len, num_features]
         """
-        # Compute per-feature standard deviation
-        std_dev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5)  # [batch, 1, features]
-        
-        # Sample Gaussian noise
-        noise = torch.randn_like(x)  # [batch, seq_len, features]
-        
-        # Scale noise by std_dev and noise_level
-        scaled_noise = noise * std_dev * noise_level
-        
-        # Add noise to signal
-        x_noisy = x + scaled_noise
-        
-        return x_noisy, scaled_noise
-
-    def forward(self, x, add_noise_flag=False, noise_level=0.1):
-        # Input: [batch_size, seq_len, num_features]
-        batch_size, seq_len, num_features = x.size()
-        
-        # For pretrain and forecasting, use shared linear backbone
-        if self.task_name == "pretrain" or (self.task_name == "finetune" and self.pred_len is not None):
-            # Store clean signal
-            x_clean = x.clone()
-            
-            # Add noise during pretrain if enabled
-            if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
-                x, noise = self.add_noise(x, noise_level=noise_level)
-            
-            # Process each feature independently with linear backbone
-            x = x.permute(0, 2, 1)  # [batch, num_features, seq_len]
-            x_flat = x.reshape(batch_size * num_features, seq_len)  # [batch*features, seq_len]
-            
-            # Apply shared linear backbone
-            features = self.linear_backbone(x_flat)  # [batch*features, hidden_dim]
-            
-            # Apply forgetting mechanisms during finetune
-            if self.use_forgetting:
-                is_finetune = (self.task_name == "finetune")
-                features = self.forgetting_layer(features, is_finetune=is_finetune)
-            
-            if self.task_name == "pretrain":
-                # Reconstruction (denoising)
-                reconstruction = self.decoder(features)  # [batch*features, seq_len]
-                reconstruction = reconstruction.view(batch_size, num_features, seq_len)
-                reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
-                return reconstruction
-            
-            else:  # Forecasting
-                # Predict future values
-                predictions = self.forecaster(features)  # [batch*features, pred_len]
-                predictions = predictions.view(batch_size, num_features, self.pred_len)
-                predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
-                return predictions
-            
-        else:  # Classification - uses Conv architecture
-            # No noise for classification
-            x = x.transpose(1, 2)  # [batch, num_features, seq_len]
-            
-            x = F.relu(self.conv1(x))
-            x = self.pool(x)
-            x = self.dropout(x)
-            
-            x = F.relu(self.conv2(x))
-            x = self.pool(x)
-            x = self.dropout(x)
-            
-            x = F.relu(self.conv3(x))
-            
-            x = self.global_pool(x)
-            x = x.squeeze(-1)
-            x = self.classifier(x)
-            return x
+        x = self.flatten(x)  # (batch_size, num_features, seq_len * d_model)
+        x = self.forecast_head(x)  # (batch_size, num_features, pred_len)
+        x = self.dropout(x)  # (batch_size, num_features, pred_len)
+        x = x.permute(0, 2, 1)  # (batch_size, pred_len, num_features)
+        return x
 
 
 class Model(nn.Module):
     """
-    TimeDART with shared linear backbone + task-specific heads
+    TimeDART
     """
+
     def __init__(self, args):
         super(Model, self).__init__()
         self.input_len = args.input_len
-        self.pred_len = args.pred_len
-        self.task_name = args.task_name
-        self.use_norm = args.use_norm
-        self.use_noise = getattr(args, 'use_noise', False)
-        self.noise_level = getattr(args, 'noise_level', 0.1)
-        
-        # Forgetting mechanism parameters
-        self.use_forgetting = getattr(args, 'use_forgetting', False)
-        self.forgetting_type = getattr(args, 'forgetting_type', 'activation')  # 'activation', 'weight', 'adaptive'
-        self.forgetting_rate = getattr(args, 'forgetting_rate', 0.1)
 
-        self.model = LightweightModel(
-            in_channels=args.enc_in,
-            out_channels=args.enc_in,
-            task_name=self.task_name,
-            pred_len=self.pred_len if hasattr(args, 'pred_len') else None,
-            num_classes=getattr(args, 'num_classes', 2),
-            input_len=args.input_len,
-            use_noise=self.use_noise,
-            use_noise=self.use_noise,
-            use_forgetting=self.use_forgetting,
-            forgetting_type=self.forgetting_type,
-            forgetting_rate=self.forgetting_rate
+        # For Model Hyperparameters
+        self.d_model = args.d_model
+        self.num_heads = args.n_heads
+        self.feedforward_dim = args.d_ff
+        self.dropout = args.dropout
+        self.device = args.device
+        self.task_name = args.task_name
+        self.pred_len = args.pred_len
+        self.use_norm = args.use_norm
+        self.channel_independence = ChannelIndependence()
+
+        # Patch
+        self.patch_len = args.patch_len
+        self.stride = args.stride
+        self.patch = Patch(
+            patch_len=self.patch_len,
+            stride=self.stride,
+        )
+        self.seq_len = int((self.input_len - self.patch_len) / self.stride) + 1
+
+        # Embedding
+        self.enc_embedding = PatchEmbedding(
+            patch_len=self.patch_len,
+            d_model=self.d_model,
         )
 
+        self.positional_encoding = PositionalEncoding(
+            d_model=self.d_model,
+            dropout=self.dropout,
+        )
+
+        sos_token = torch.randn(1, 1, self.d_model, device=self.device)
+        self.sos_token = nn.Parameter(sos_token, requires_grad=True)
+
+        self.add_sos_token_and_drop_last = AddSosTokenAndDropLast(
+            sos_token=self.sos_token,
+        )
+
+        # Encoder (Casual Trasnformer)
+        self.diffusion = Diffusion(
+            time_steps=args.time_steps,
+            device=self.device,
+            scheduler=args.scheduler,
+        )
+        self.encoder = CausalTransformer(
+            d_model=args.d_model,
+            num_heads=args.n_heads,
+            feedforward_dim=args.d_ff,
+            dropout=args.dropout,
+            num_layers=args.e_layers,
+        )
+        # self.encoder = DilatedConvEncoder(
+        #     in_channels=self.d_model,
+        #     channels=[self.d_model] * args.e_layers,
+        #     kernel_size=3,
+        # )
+
+        # Decoder
+        if self.task_name == "pretrain":
+            self.denoising_patch_decoder = DenoisingPatchDecoder(
+                d_model=args.d_model,
+                num_layers=args.d_layers,
+                num_heads=args.n_heads,
+                feedforward_dim=args.d_ff,
+                dropout=args.dropout,
+                mask_ratio=args.mask_ratio,
+            )
+
+            self.projection = FlattenHead(
+                seq_len=self.seq_len,
+                d_model=self.d_model,
+                pred_len=args.input_len,
+                dropout=args.head_dropout,
+            )
+            # self.projection = ARFlattenHead(
+            #     d_model=self.d_model,
+            #     patch_len=self.patch_len,
+            #     dropout=args.head_dropout,
+            # )
+
+        elif self.task_name == "finetune":
+            self.head = FlattenHead(
+                seq_len=self.seq_len,
+                d_model=args.d_model,
+                pred_len=args.pred_len,
+                dropout=args.head_dropout,
+            )
+
     def pretrain(self, x):
+        # [batch_size, input_len, num_features]
         batch_size, input_len, num_features = x.size()
-        
-        # Normalization
         if self.use_norm:
-            means = torch.mean(x, dim=1, keepdim=True).detach()
-            x = x - means
-            stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
-            x = x / stdevs
+            # Instance Normalization
+            means = torch.mean(
+                x, dim=1, keepdim=True
+            ).detach()  # [batch_size, 1, num_features], detach from gradient
+            x = x - means  # [batch_size, input_len, num_features]
+            stdevs = torch.sqrt(
+                torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
+            ).detach()  # [batch_size, 1, num_features]
+            x = x / stdevs  # [batch_size, input_len, num_features]
 
-        # Forward with noise (model will denoise)
-        predict_x = self.model(x, add_noise_flag=True, noise_level=self.noise_level)
+        # Channel Independence
+        x = self.channel_independence(x)  # [batch_size * num_features, input_len, 1]
+        # Patch
+        x_patch = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
 
-        # Denormalization
+        # For Casual Transformer
+        x_embedding = self.enc_embedding(
+            x_patch
+        )  # [batch_size * num_features, seq_len, d_model]
+        x_embedding_bias = self.add_sos_token_and_drop_last(
+            x_embedding
+        )  # [batch_size * num_features, seq_len, d_model]
+        x_embedding_bias = self.positional_encoding(x_embedding_bias)
+        x_out = self.encoder(
+            x_embedding_bias,
+            is_mask=True,
+        )  # [batch_size * num_features, seq_len, d_model]
+
+        # Noising Diffusion
+        noise_x_patch, noise, t = self.diffusion(
+            x_patch
+        )  # [batch_size * num_features, seq_len, patch_len]
+        noise_x_embedding = self.enc_embedding(
+            noise_x_patch
+        )  # [batch_size * num_features, seq_len, d_model]
+        noise_x_embedding = self.positional_encoding(noise_x_embedding)
+
+        # For Denoising Patch Decoder
+        predict_x = self.denoising_patch_decoder(
+            query=noise_x_embedding,
+            key=x_out,
+            value=x_out,
+            is_tgt_mask=True,
+            is_src_mask=True,
+        )  # [batch_size * num_features, seq_len, d_model]
+
+        # For Decoder
+        predict_x = predict_x.reshape(
+            batch_size, num_features, -1, self.d_model
+        )  # [batch_size, num_features, seq_len, d_model]
+        predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+
+        # Instance Denormalization
         if self.use_norm:
-            predict_x = predict_x * stdevs
-            predict_x = predict_x + means
+            predict_x = predict_x * (stdevs[:, 0, :].unsqueeze(1)).repeat(
+                1, input_len, 1
+            )  # [batch_size, input_len, num_features]
+            predict_x = predict_x + (means[:, 0, :].unsqueeze(1)).repeat(
+                1, input_len, 1
+            )  # [batch_size, input_len, num_features]
 
         return predict_x
 
     def forecast(self, x):
-        batch_size, input_len, num_features = x.size()
-        
-        # Normalization
+        batch_size, _, num_features = x.size()
         if self.use_norm:
             means = torch.mean(x, dim=1, keepdim=True).detach()
             x = x - means
-            stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
+            stdevs = torch.sqrt(
+            torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
+            ).detach()
             x = x / stdevs
 
-        # Forward pass without noise
-        prediction = self.model(x, add_noise_flag=False)
+        x = self.channel_independence(x)  # [batch_size * num_features, input_len, 1]
+        x = self.patch(x)  # [batch_size * num_features, seq_len, patch_len]
+        x = self.enc_embedding(x)  # [batch_size * num_features, seq_len, d_model]
+        x = self.positional_encoding(x)  # [batch_size * num_features, seq_len, d_model]
+        x = self.encoder(
+            x,
+            is_mask=False,
+        )  # [batch_size * num_features, seq_len, d_model]
+        x = x.reshape(
+            batch_size, num_features, -1, self.d_model
+        )  # [batch_size, num_features, seq_len, d_model]
 
-        # Denormalization
+        # forecast
+        x = self.head(x)  # [bs, pred_len, n_vars]
+
+        # denormalization
         if self.use_norm:
-            prediction = prediction * stdevs[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
-            prediction = prediction + means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
+            x = x * (stdevs[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)
+            x = x + (means[:, 0, :].unsqueeze(1)).repeat(1, self.pred_len, 1)
 
-        return prediction
+        return x
     
     def forward(self, batch_x):
+
         if self.task_name == "pretrain":
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":
-            return self.forecast(batch_x)
+            dec_out = self.forecast(batch_x)
+            return dec_out[:, -self.pred_len: , :]
         else:
             raise ValueError("task_name should be 'pretrain' or 'finetune'")
 
@@ -287,30 +254,168 @@ class ClsModel(nn.Module):
     def __init__(self, args):
         super(ClsModel, self).__init__()
         self.input_len = args.input_len
+
+        # For Model Hyperparameters
+        self.d_model = args.d_model
+        self.num_heads = args.n_heads
+        self.feedforward_dim = args.d_ff
+        self.dropout = args.dropout
+        self.device = args.device
         self.task_name = args.task_name
         self.num_classes = args.num_classes
-        self.use_noise = getattr(args, 'use_noise', False)
-        self.noise_level = getattr(args, 'noise_level', 0.1)
-        
-        self.model = LightweightModel(
-            in_channels=args.enc_in,
-            out_channels=args.enc_in,
-            task_name=self.task_name,
-            pred_len=None,
-            num_classes=self.num_classes,
-            input_len=args.input_len,
-            use_noise=self.use_noise
+
+        # Patch
+        self.patch_len = args.patch_len
+        self.stride = args.stride
+        self.seq_len = int((self.input_len - self.patch_len) / self.stride) + 2
+        padding = self.seq_len * self.stride - self.input_len
+
+        # Embedding
+        self.enc_embedding = ClsEmbedding(
+            num_features=args.enc_in,
+            d_model=args.d_model,
+            kernel_size=args.patch_len,
+            stride=args.stride,
+            padding=padding,
         )
 
+        self.positional_encoding = PositionalEncoding(
+            d_model=self.d_model,
+            dropout=self.dropout,
+        )
+
+        sos_token = torch.randn(1, 1, self.d_model, device=self.device)
+        self.sos_token = nn.Parameter(sos_token, requires_grad=True)
+
+        self.add_sos_token_and_drop_last = AddSosTokenAndDropLast(
+            sos_token=self.sos_token,
+        )
+
+        # Encoder (Casual Trasnformer)
+        self.diffusion = Diffusion(
+            time_steps=args.time_steps,
+            device=self.device,
+            scheduler=args.scheduler,
+        )
+        self.encoder = CausalTransformer(
+            d_model=args.d_model,
+            num_heads=args.n_heads,
+            feedforward_dim=args.d_ff,
+            dropout=args.dropout,
+            num_layers=args.e_layers,
+        )
+        # self.encoder = DilatedConvEncoder(
+        #     in_channels=self.d_model,
+        #     channels=[self.d_model] * args.e_layers,
+        #     kernel_size=3,
+        # )
+
+        # Decoder
+        if self.task_name == "pretrain":
+            self.denoising_patch_decoder = DenoisingPatchDecoder(
+                d_model=args.d_model,
+                num_layers=args.d_layers,
+                num_heads=args.n_heads,
+                feedforward_dim=args.d_ff,
+                dropout=args.dropout,
+                mask_ratio=args.mask_ratio,
+            )
+
+            self.projection = ClsFlattenHead(
+                seq_len=self.seq_len,
+                d_model=self.d_model,
+                pred_len=args.input_len,
+                num_features=args.c_out,
+                dropout=args.head_dropout,
+            )
+
+        elif self.task_name == "finetune":
+            self.head = OldClsHead(
+                seq_len=self.seq_len,
+                d_model=args.d_model,
+                num_classes=args.num_classes,
+                dropout=args.head_dropout,
+            )
+
     def pretrain(self, x):
-        # Add noise during pretrain
-        return self.model(x, add_noise_flag=True, noise_level=self.noise_level)
+        # [batch_size, input_len, num_features]
+        # Instance Normalization
+        # batch_size, input_len, num_features = x.size()
+        # means = torch.mean(
+        #     x, dim=1, keepdim=True
+        # ).detach()  # [batch_size, 1, num_features], detach from gradient
+        # x = x - means  # [batch_size, input_len, num_features]
+        # stdevs = torch.sqrt(
+        #     torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
+        # ).detach()  # [batch_size, 1, num_features]
+        # x = x / stdevs  # [batch_size, input_len, num_features]
+
+        # For Casual Transformer
+        x_embedding = self.enc_embedding(
+            x
+        )  # [batch_size, seq_len, d_model]
+        x_embedding_bias = self.add_sos_token_and_drop_last(
+            x_embedding
+        )  # [batch_size, seq_len, d_model]
+        x_embedding_bias = self.positional_encoding(x_embedding_bias)
+        x_out = self.encoder(
+            x_embedding_bias,
+            is_mask=True,
+        )  # [batch_size, seq_len, d_model]
+
+        # Noising Diffusion
+        noise_x_patch, noise, t = self.diffusion(
+            x
+        )  # [batch_size, seq_len, patch_len]
+        noise_x_embedding = self.enc_embedding(
+            noise_x_patch
+        )  # [batch_size, seq_len, d_model]
+        noise_x_embedding = self.positional_encoding(noise_x_embedding)
+
+        # For Denoising Patch Decoder
+        predict_x = self.denoising_patch_decoder(
+            query=noise_x_embedding,
+            key=x_out,
+            value=x_out,
+            is_tgt_mask=True,
+            is_src_mask=True,
+        )  # [batch_size, seq_len, d_model]
+
+        # For Decoder
+        predict_x = self.projection(predict_x)  # [batch_size, input_len, num_features]
+
+        # Instance Denormalization
+        # predict_x = predict_x * (stdevs[:, 0, :].unsqueeze(1)).repeat(
+        #     1, input_len, 1
+        # )  # [batch_size, input_len, num_features]
+        # predict_x = predict_x + (means[:, 0, :].unsqueeze(1)).repeat(
+        #     1, input_len, 1
+        # )  # [batch_size, input_len, num_features]
+
+        return predict_x
 
     def forecast(self, x):
-        # No noise during finetune/classification
-        return self.model(x, add_noise_flag=False)
+        # batch_size, _, num_features = x.size()
+        # means = torch.mean(x, dim=1, keepdim=True).detach()
+        # x = x - means
+        # stdevs = torch.sqrt(
+        #     torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5
+        # ).detach()
+        # x = x / stdevs
+
+        x = self.enc_embedding(x)  # [batch_size, seq_len, d_model]
+        x = self.positional_encoding(x)  # [batch_size, seq_len, d_model]
+        x = self.encoder(
+            x,
+            is_mask=False,
+        )  # [batch_size, seq_len, d_model]
+        # forecast
+        x = self.head(x)  # [bs, num_classes]
+
+        return x
     
     def forward(self, batch_x):
+
         if self.task_name == "pretrain":
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":
