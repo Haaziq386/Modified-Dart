@@ -4,7 +4,7 @@ import math
 
 
 class PositionalEmbedding(nn.Module):
-    def __init__(self, d_model, max_len=5000):
+    def __init__(self, d_model, max_len=5120):
         super(PositionalEmbedding, self).__init__()
         # Compute the positional encodings once in log space.
         pe = torch.zeros(max_len, d_model).float()
@@ -166,7 +166,7 @@ class AbsolutePositionEncoding(nn.Module):
     def __init__(
         self,
         d_model: int,
-        max_len: int = 5000,
+        max_len: int = 5120,
     ):
         super(AbsolutePositionEncoding, self).__init__()
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)

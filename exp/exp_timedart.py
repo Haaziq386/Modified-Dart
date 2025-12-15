@@ -40,7 +40,7 @@ class Exp_TimeDART(Exp_Basic):
         if self.args.load_checkpoints:
             print("Loading ckpt: {}".format(self.args.load_checkpoints))
 
-            transfer_device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            transfer_device = 'cuda:{}'.format(self.args.gpu) if torch.cuda.is_available() else "cpu"
             state_dict = torch.load(self.args.load_checkpoints, map_location=transfer_device)
             model.load_state_dict(state_dict, strict=False)  # strict=False allows missing keys (e.g., head)
 
@@ -285,7 +285,7 @@ class Exp_TimeDART(Exp_Basic):
                 adjust_learning_rate(model_optim, model_scheduler, epoch + 1, self.args)
 
         best_model_path = path + "/" + "checkpoint.pth"
-        self.model.load_state_dict(torch.load(best_model_path, map_location="cuda:0"))
+        self.model.load_state_dict(torch.load(best_model_path, map_location='cuda:{}'.format(self.args.gpu)))
 
         self.lr = model_scheduler.get_last_lr()[0]
 
