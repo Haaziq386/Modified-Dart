@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/ETT-small/ \
     --data_path ETTh1.csv \
     --model_id ETTh1 \
-    --model TimeDART \
+    --model HtulTS \
     --data ETTh1 \
     --features M \
     --input_len 336 \
@@ -26,7 +26,8 @@ python -u run.py \
     --batch_size 16 \
     --use_noise 1 \
     --noise_level 0.15 \
-    --use_decomposition 1 \
-    --period 24 \
     --train_epochs 50 \
-    --gpu 0
+    --gpu 2 \
+    --use_forgetting 1 \
+    --forgetting_type activation \
+    --forgetting_rate 0.1

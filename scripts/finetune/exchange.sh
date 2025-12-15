@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/exchange/ \
         --data_path exchange.csv \
         --model_id Exchange \
-        --model TimeDART \
+        --model HtulTS \
         --data Exchange \
         --features M \
         --input_len 336 \

@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/ETT-small/ \
         --data_path ETTm2.csv \
         --model_id ETTm2 \
-        --model TimeDART \
+        --model HtulTS \
         --data ETTm2 \
         --features M \
         --input_len 336 \

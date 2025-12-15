@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/weather/ \
         --data_path weather.csv \
         --model_id Weather \
-        --model TimeDART \
+        --model HtulTS \
         --data Weather \
         --features M \
         --input_len 336 \

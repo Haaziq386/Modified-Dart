@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/weather/ \
     --data_path weather.csv \
     --model_id Weather \
-    --model TimeDART \
+    --model HtulTS \
     --data Weather \
     --features M \
     --input_len 336 \

@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/Gesture/ \
     --model_id Gesture \
-    --model TimeDART \
+    --model HtulTS \
     --data Gesture \
     --e_layers 2 \
     --d_layers 1 \

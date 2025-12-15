@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/PEMS/ \
     --data_path PEMS04.npz \
     --model_id PEMS04 \
-    --model TimeDART \
+    --model HtulTS \
     --data PEMS04 \
     --features M \
     --input_len 96 \

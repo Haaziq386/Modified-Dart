@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/traffic/ \
     --data_path traffic.csv \
     --model_id Traffic \
-    --model TimeDART \
+    --model HtulTS \
     --data Traffic \
     --features M \
     --input_len 336 \

@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/EMG/ \
     --model_id EMG \
-    --model TimeDART \
+    --model HtulTS \
     --data EMG \
     --e_layers 2 \
     --d_layers 1 \

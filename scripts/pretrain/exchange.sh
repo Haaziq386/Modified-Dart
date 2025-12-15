@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/exchange/ \
     --data_path exchange.csv \
     --model_id Exchange \
-    --model TimeDART \
+    --model HtulTS \
     --data Exchange \
     --features M \
     --input_len 336 \

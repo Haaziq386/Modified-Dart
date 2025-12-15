@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/har_no_big/ \
     --model_id HAR \
-    --model TimeDART \
+    --model HtulTS \
     --data HAR \
     --e_layers 2 \
     --d_layers 1 \

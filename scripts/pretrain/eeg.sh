@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/eeg_no_big/ \
     --model_id EEG \
-    --model TimeDART \
+    --model HtulTS \
     --data EEG \
     --e_layers 2 \
     --d_layers 1 \

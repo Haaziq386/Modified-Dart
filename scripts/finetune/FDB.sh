@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/FDB/ \
     --model_id FDB \
-    --model TimeDART \
+    --model HtulTS \
     --data FDB \
     --e_layers 2 \
     --d_layers 1 \

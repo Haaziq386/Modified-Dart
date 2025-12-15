@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/FDA/ \
     --model_id FDA \
-    --model TimeDART \
+    --model HtulTS \
     --data FDA \
     --e_layers 2 \
     --d_layers 1 \

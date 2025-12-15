@@ -5,7 +5,7 @@ for pred_len in 12 24 36 48; do
         --root_path ./datasets/PEMS/ \
         --data_path PEMS03.npz \
         --model_id PEMS03 \
-        --model TimeDART \
+        --model HtulTS \
         --data PEMS03 \
         --features M \
         --input_len 96 \

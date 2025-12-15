@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/ETT-small/ \
     --data_path ETTm2.csv \
     --model_id ETTm2 \
-    --model TimeDART \
+    --model HtulTS \
     --data ETTm2 \
     --features M \
     --input_len 336 \

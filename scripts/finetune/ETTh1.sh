@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/ETT-small/ \
         --data_path ETTh1.csv \
         --model_id ETTh1 \
-        --model TimeDART \
+        --model HtulTS \
         --data ETTh1 \
         --features M \
         --input_len 336 \
@@ -24,7 +24,7 @@ for pred_len in 96 192 336 720; do
         --dropout 0.2 \
         --head_dropout 0.1 \
         --batch_size 16 \
-        --gpu 0 \
+        --gpu 2 \
         --lr_decay 0.5 \
         --lradj step \
         --time_steps 1000 \
@@ -32,6 +32,7 @@ for pred_len in 96 192 336 720; do
         --patience 3 \
         --learning_rate 0.0001 \
         --pct_start 0.3 \
-        --use_decomposition 1 \
-        --period 24
+        --use_forgetting 1 \
+        --forgetting_type activation \
+        --forgetting_rate 0.1
 done

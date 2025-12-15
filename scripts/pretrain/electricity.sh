@@ -3,7 +3,7 @@ python -u run.py \
     --root_path ./datasets/electricity/ \
     --data_path electricity.csv \
     --model_id Electricity \
-    --model TimeDART \
+    --model HtulTS \
     --data Electricity \
     --features M \
     --input_len 336 \

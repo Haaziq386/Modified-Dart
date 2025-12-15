@@ -5,7 +5,7 @@ for pred_len in 96 192 336 720; do
         --root_path ./datasets/electricity/ \
         --data_path electricity.csv \
         --model_id Electricity \
-        --model TimeDART \
+        --model HtulTS \
         --data Electricity \
         --features M \
         --input_len 336 \
