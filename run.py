@@ -4,7 +4,6 @@ from exp.exp_timedart import Exp_TimeDART
 from exp.exp_timedart_v2 import Exp_TimeDART_v2
 from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
-
 import random
 import numpy as np
 import os
@@ -160,6 +159,12 @@ parser.add_argument("--pct_start", type=float, default=0.3, help="pct_start")
 parser.add_argument("--patch_len", type=int, default=12, help="path length")
 parser.add_argument("--stride", type=int, default=12, help="stride")
 
+# Replace the existing decomposition arguments with:
+parser.add_argument('--use_decomposition', type=int, default=0, 
+                   help='Use seasonal-trend decomposition (0=False, 1=True)')
+parser.add_argument('--period', type=int, default=24, 
+                   help='Seasonal period for decomposition')
+
 # optimization
 parser.add_argument(
     "--num_workers", type=int, default=5, help="data loader num workers"
@@ -200,14 +205,21 @@ parser.add_argument(
 parser.add_argument(
     "--scheduler", type=str, default="cosine", help="scheduler in diffusion"
 )
-parser.add_argument('--use_noise', type=int, default=0, help='use denoising pretraining')
-parser.add_argument('--noise_level', type=float, default=0.1, help='noise level (fraction of std dev)')
+parser.add_argument('--use_noise', type=int, default=1, help='use denoising pretraining (default: enabled)')
+parser.add_argument('--noise_level', type=float, default=0.15, help='noise level (fraction of std dev)')
 
 parser.add_argument("--lr_decay", type=float, default=0.5, help="learning rate decay")
 parser.add_argument("--mask_ratio", type=float, default=1.0, help="mask ratio")
 
 # Classification
 parser.add_argument("--num_classes", type=int, default=6, help="number of classes")
+
+# Forgetting mechanisms
+parser.add_argument('--use_forgetting', type=int, default=0, help='use forgetting mechanisms during finetune (0=False, 1=True)')
+parser.add_argument('--forgetting_type', type=str, default='activation', 
+                   help='type of forgetting mechanism, options:[activation, weight, adaptive]')
+parser.add_argument('--forgetting_rate', type=float, default=0.1, 
+                   help='forgetting strength (0.0=no forgetting, 1.0=complete forgetting)')
 
 ## SimMTM 
 # Pre-train
@@ -242,7 +254,7 @@ Exp = Exp_map[args.model]
 if args.task_name == "pretrain":
     for ii in range(args.itr):
         # setting record of experiments
-        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_ts{}_sc{}".format(
+        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_ts{}_sc{}_decomp{}_per{}".format(
             args.task_name,
             args.model,
             args.data,
@@ -263,6 +275,10 @@ if args.task_name == "pretrain":
             args.learning_rate,
             args.time_steps,
             args.scheduler,
+            args.use_decomposition,
+            args.period,
+            args.use_noise,
+            args.noise_level,
         )
 
         exp = Exp(args)  # set experiments
@@ -275,7 +291,7 @@ if args.task_name == "pretrain":
 elif args.task_name == "finetune":
     for ii in range(args.itr):
         # setting record of experiments
-        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}".format(
+        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_decomp{}_per{}".format(
             args.task_name,
             args.model,
             args.data,
@@ -294,6 +310,11 @@ elif args.task_name == "finetune":
             args.train_epochs,
             args.batch_size,
             args.learning_rate,
+            args.use_decomposition,
+            args.period,
+            args.use_forgetting,
+            args.forgetting_type,
+            args.forgetting_rate,
         )
 
         args.load_checkpoints = os.path.join(

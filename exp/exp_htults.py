@@ -40,8 +40,8 @@ class Exp_HtulTS(Exp_Basic):
         if self.args.load_checkpoints:
             print("Loading ckpt: {}".format(self.args.load_checkpoints))
 
-            transfer_device = 'cuda:{}'.format(self.args.gpu) if torch.cuda.is_available() else "cpu"
-            state_dict = torch.load(self.args.load_checkpoints, map_location=transfer_device)
+            # Load to CPU first to handle checkpoints saved on different GPU devices
+            state_dict = torch.load(self.args.load_checkpoints, map_location='cpu')
             model.load_state_dict(state_dict, strict=False)  # strict=False allows missing keys (e.g., head)
 
         if torch.cuda.device_count() > 1:
@@ -285,7 +285,7 @@ class Exp_HtulTS(Exp_Basic):
                 adjust_learning_rate(model_optim, model_scheduler, epoch + 1, self.args)
 
         best_model_path = path + "/" + "checkpoint.pth"
-        self.model.load_state_dict(torch.load(best_model_path, map_location='cuda:{}'.format(self.args.gpu)))
+        self.model.load_state_dict(torch.load(best_model_path, map_location='cpu'))
 
         self.lr = model_scheduler.get_last_lr()[0]
 
@@ -471,7 +471,7 @@ class Exp_HtulTS(Exp_Basic):
                 adjust_learning_rate(model_optim, model_scheduler, epoch + 1, self.args)
 
         best_model_path = path + "/" + "checkpoint.pth"
-        self.model.load_state_dict(torch.load(best_model_path))
+        self.model.load_state_dict(torch.load(best_model_path, map_location='cpu'))
         return self.model
 
     def cls_valid(self, vali_loader, model_criteria):

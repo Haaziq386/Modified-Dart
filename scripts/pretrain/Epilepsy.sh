@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/Epilepsy/ \
     --model_id Epilepsy \
-    --model TimeDART \
+    --model HtulTS \
     --data Epilepsy \
     --e_layers 2 \
     --d_layers 1 \
@@ -27,5 +27,8 @@ python -u run.py \
     --train_epochs 50 \
     --use_noise 1 \
     --noise_level 0.15 \
-    --gpu 0 \
-    --use_norm 0
+    --gpu 2 \
+    --use_norm 0 \
+    --use_forgetting 1 \
+    --forgetting_type activation \
+    --forgetting_rate 0.1

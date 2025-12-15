@@ -147,46 +147,58 @@ class LightweightModel(nn.Module):
         # Input: [batch_size, seq_len, num_features]
         batch_size, seq_len, num_features = x.size()
         
-        # For pretrain and forecasting, use shared linear backbone
-        if self.task_name == "pretrain" or (self.task_name == "finetune" and self.pred_len is not None):
-            # Store clean signal
-            x_clean = x.clone()
+        # 1. SHARED BACKBONE PASS (Applies to ALL tasks now)
+        # ---------------------------------------------------
+        # Store clean signal for logic references if needed
+        x_clean = x.clone()
+        
+        # Add noise only if strictly pretraining
+        if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
+            x, noise = self.add_noise(x, noise_level=noise_level)
             
-            # Add noise during pretrain if enabled
-            if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
-                x, noise = self.add_noise(x, noise_level=noise_level)
+        # Flatten: [batch, seq_len, features] -> [batch * features, seq_len]
+        x_permuted = x.permute(0, 2, 1)
+        x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
+        
+        # Pass through the Pretrained Linear Backbone
+        # features shape: [batch * features, hidden_dim (512)]
+        features = self.linear_backbone(x_flat)
+
+        # Apply forgetting if enabled
+        if self.use_forgetting:
+            is_finetune = (self.task_name == "finetune")
+            features = self.forgetting_layer(features, is_finetune=is_finetune)
+
+        # 2. TASK-SPECIFIC HEADS
+        # ---------------------------------------------------
+        
+        # CASE A: PRETRAINING (Reconstruction)
+        if self.task_name == "pretrain":
+            # Reconstruction (denoising)
+            reconstruction = self.decoder(features)  # [batch*features, seq_len]
+            reconstruction = reconstruction.view(batch_size, num_features, seq_len)
+            reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
+            return reconstruction
+
+        # CASE B: FORECASTING (Finetune with pred_len)
+        elif self.task_name == "finetune" and self.pred_len is not None:
+            predictions = self.forecaster(features)  # [batch*features, pred_len]
+            predictions = predictions.view(batch_size, num_features, self.pred_len)
+            predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
+            return predictions
+
+        # CASE C: CLASSIFICATION (Finetune without pred_len)
+        else:
+            # Reshape features to be compatible with Conv1d
+            # Backbone output: [Batch*Features, Hidden_Dim]
+            # Conv Input Needed: [Batch, Channels, Length]
+            # We map: Features -> Channels, Hidden_Dim -> Length
             
-            # Process each feature independently with linear backbone
-            x = x.permute(0, 2, 1)  # [batch, num_features, seq_len]
-            x_flat = x.reshape(batch_size * num_features, seq_len)  # [batch*features, seq_len]
+            # New shape: [Batch, Features, Hidden_Dim]
+            cnn_input = features.view(batch_size, num_features, -1)
             
-            # Apply shared linear backbone
-            features = self.linear_backbone(x_flat)  # [batch*features, hidden_dim]
-            
-            # Apply forgetting mechanisms during finetune
-            if self.use_forgetting:
-                is_finetune = (self.task_name == "finetune")
-                features = self.forgetting_layer(features, is_finetune=is_finetune)
-            
-            if self.task_name == "pretrain":
-                # Reconstruction (denoising)
-                reconstruction = self.decoder(features)  # [batch*features, seq_len]
-                reconstruction = reconstruction.view(batch_size, num_features, seq_len)
-                reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
-                return reconstruction
-            
-            else:  # Forecasting
-                # Predict future values
-                predictions = self.forecaster(features)  # [batch*features, pred_len]
-                predictions = predictions.view(batch_size, num_features, self.pred_len)
-                predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
-                return predictions
-            
-        else:  # Classification - uses Conv architecture
-            # No noise for classification
-            x = x.transpose(1, 2)  # [batch, num_features, seq_len]
-            
-            x = F.relu(self.conv1(x))
+            # Pass the PRETRAINED features into the CNN
+            x = F.relu(self.conv1(cnn_input))
             x = self.pool(x)
             x = self.dropout(x)
             
@@ -199,6 +211,7 @@ class LightweightModel(nn.Module):
             x = self.global_pool(x)
             x = x.squeeze(-1)
             x = self.classifier(x)
+            
             return x
 
 
@@ -291,6 +304,11 @@ class ClsModel(nn.Module):
         self.use_noise = getattr(args, 'use_noise', False)
         self.noise_level = getattr(args, 'noise_level', 0.1)
         
+        # FIX: Added parameter extraction for ClsModel
+        self.use_forgetting = getattr(args, 'use_forgetting', False)
+        self.forgetting_type = getattr(args, 'forgetting_type', 'activation')
+        self.forgetting_rate = getattr(args, 'forgetting_rate', 0.1)
+        
         self.model = LightweightModel(
             in_channels=args.enc_in,
             out_channels=args.enc_in,
@@ -298,7 +316,11 @@ class ClsModel(nn.Module):
             pred_len=None,
             num_classes=self.num_classes,
             input_len=args.input_len,
-            use_noise=self.use_noise
+            use_noise=self.use_noise,
+            # FIX: Passing the extracted parameters to the inner model
+            use_forgetting=self.use_forgetting,
+            forgetting_type=self.forgetting_type,
+            forgetting_rate=self.forgetting_rate
         )
 
     def pretrain(self, x):

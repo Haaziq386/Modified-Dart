@@ -3,7 +3,7 @@ python -u run.py \
     --downstream_task classification \
     --root_path datasets/Epilepsy/ \
     --model_id Epilepsy \
-    --model TimeDART \
+    --model HtulTS \
     --data Epilepsy \
     --e_layers 2 \
     --d_layers 1 \
@@ -22,7 +22,7 @@ python -u run.py \
     --time_steps 1000 \
     --scheduler cosine \
     --batch_size 16 \
-    --gpu 0 \
+    --gpu 2 \
     --lr_decay 1.0 \
     --lradj decay \
     --scheduler cosine \
@@ -30,4 +30,7 @@ python -u run.py \
     --learning_rate 0.001 \
     --pct_start 0.3 \
     --train_epochs 100 \
-    --use_norm 0
+    --use_norm 0 \
+    --use_forgetting 1 \
+    --forgetting_type activation \
+    --forgetting_rate 0.1
