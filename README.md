@@ -2,7 +2,7 @@
 
 ## Overview
 
-HtulTS is a lightweight time series model designed for both pretraining and downstream tasks (forecasting and classification). It features a shared linear backbone architecture with task-specific heads and optional forgetting mechanisms for improved transfer learning capabilities.
+HtulTS is a lightweight time series model designed for both pretraining and downstream tasks (forecasting and classification). It features a shared linear backbone architecture with task-specific heads and optional forgetting mechanisms for improved transfer learning capabilities.  
 **⚠️This is a experimentation and in progress repository aiming to make a good Time Series Forecaster.**
 
 ## Key Features
