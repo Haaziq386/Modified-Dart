@@ -200,8 +200,6 @@ Monitor both:
 
 ## Files Added
 
-- `models/MultiTaskTimeDART.py`: Transformer-based multi-task model
-- `exp/exp_multitask.py`: Multi-task experiment class
 - `models/HtulTS.py`: Extended with `MultiTaskModel` and `MultiTaskLightweightModel`
 - `exp/exp_htults.py`: Extended with `multi_task_train()` method
 - `scripts/multitask/`: Example training scripts

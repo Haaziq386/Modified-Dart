@@ -4,7 +4,6 @@ from exp.exp_timedart import Exp_TimeDART
 from exp.exp_timedart_v2 import Exp_TimeDART_v2
 from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
-from exp.exp_multitask import Exp_MultiTask
 import random
 import numpy as np
 import os
@@ -265,7 +264,6 @@ Exp_map = {
     "HtulTS": Exp_HtulTS,
     "TimeDART_v2": Exp_TimeDART_v2,
     "SimMTM": Exp_SimMTM,
-    "MultiTaskTimeDART": Exp_MultiTask,
 }
 
 Exp = Exp_map[args.model]
