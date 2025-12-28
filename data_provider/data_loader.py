@@ -971,3 +971,99 @@ class UEAloader(Dataset):
 
     def __len__(self):
         return len(self.all_IDs)
+
+
+# ... [Keep all previous imports and classes] ...
+
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+
+class Dataset_UCR(Dataset):
+    def __init__(self, root_path, flag='train', size=None,
+                 features='S', data_path=None, 
+                 target='OT', scale=True, timeenc=0, freq='h', **kwargs):
+        """
+        root_path: path to the UCR archive folder (e.g. ./datasets/UCRArchive_2018/UCRArchive_2018/)
+        data_path: name of the specific dataset folder (e.g. 'Crop')
+        flag: 'train', 'val', or 'test'
+        """
+        self.root_path = root_path
+        self.dataset_name = data_path
+        self.flag = flag
+        self.scale = scale
+        
+        self.__read_data__()
+
+    def __read_data__(self):
+        # 1. Construct File Paths
+        # Looks for: root_path/DatasetName/DatasetName_TRAIN.tsv
+        if self.dataset_name is None:
+             raise ValueError("You must provide data_path (dataset name) for UCR datasets")
+             
+        folder_path = os.path.join(self.root_path, self.dataset_name)
+        train_file = os.path.join(folder_path, f"{self.dataset_name}_TRAIN.tsv")
+        test_file = os.path.join(folder_path, f"{self.dataset_name}_TEST.tsv")
+
+        # 2. Load Data (TSV with no header)
+        # Col 0 is Class Label, Col 1+ are features
+        df_train = pd.read_csv(train_file, sep='\t', header=None)
+        df_test = pd.read_csv(test_file, sep='\t', header=None)
+
+        train_labels = df_train.iloc[:, 0].values
+        train_data = df_train.iloc[:, 1:].values
+        
+        test_labels = df_test.iloc[:, 0].values
+        test_data = df_test.iloc[:, 1:].values
+
+        # 3. Label Encoding (Map class names -1, 1, or 1..N to 0..N-1)
+        le = LabelEncoder()
+        all_labels = np.concatenate((train_labels, test_labels), axis=0)
+        le.fit(all_labels)
+        
+        train_labels = le.transform(train_labels)
+        test_labels = le.transform(test_labels)
+
+        # 4. Normalization (Fit on Train, Transform both)
+        if self.scale:
+            self.scaler = StandardScaler()
+            self.scaler.fit(train_data)
+            train_data = self.scaler.transform(train_data)
+            test_data = self.scaler.transform(test_data)
+
+        # 5. Reshape to [Samples, Seq_Len, Channels]
+        # UCR data is [Samples, Seq_Len], we add Channel dim => [Samples, Seq_Len, 1]
+        train_data = train_data[:, :, np.newaxis]
+        test_data = test_data[:, :, np.newaxis]
+
+        # 6. Split Train into Train/Val (80/20)
+        # UCR only provides Train/Test, so we split Train manually for validation
+        num_train_total = len(train_data)
+        split_idx = int(num_train_total * 0.8)
+
+        if self.flag == 'train':
+            self.data_x = train_data[:split_idx]
+            self.data_y = train_labels[:split_idx]
+        elif self.flag == 'val':
+            self.data_x = train_data[split_idx:]
+            self.data_y = train_labels[split_idx:]
+        elif self.flag == 'test':
+            self.data_x = test_data
+            self.data_y = test_labels
+        else:
+            raise ValueError(f"Invalid flag: {self.flag}")
+
+        # Ensure types
+        self.data_x = torch.from_numpy(self.data_x).float()
+        self.data_y = torch.from_numpy(self.data_y).long()
+        
+        print(f"Loaded UCR dataset {self.dataset_name} - {self.flag} set: shape {self.data_x.shape}")
+
+    def __getitem__(self, index):
+        seq_x = self.data_x[index]
+        seq_y = self.data_y[index]
+        # UCR doesn't use timestamps usually, returning zeros for marks
+        seq_x_mark = torch.zeros((seq_x.shape[0], 1))
+        seq_y_mark = torch.zeros((seq_x.shape[0], 1))
+        return seq_x, seq_y, seq_x_mark, seq_y_mark
+
+    def __len__(self):
+        return len(self.data_x)

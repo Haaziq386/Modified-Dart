@@ -1,5 +1,5 @@
 from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4, PSMSegLoader, \
-    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, Dataset_Physio, Dataset_PEMS, Dataset_Epilepsy ,Dataset_PT_Format
+    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader, Dataset_Physio, Dataset_PEMS, Dataset_Epilepsy ,Dataset_PT_Format ,Dataset_UCR
 from data_provider.uea import collate_fn
 from torch.utils.data import DataLoader
 
@@ -33,6 +33,7 @@ data_dict = {
     'PEMS07': Dataset_PEMS,
     'PEMS08': Dataset_PEMS,
     'Epilepsy': Dataset_Epilepsy,
+    'UCR': Dataset_UCR,
 }
 
 
@@ -75,6 +76,7 @@ def data_provider(args, flag):
         drop_last = False
         data_set = Data(
             root_path=args.root_path,
+            data_path=args.data_path,
             flag=flag,
         )
         print(flag, len(data_set))
