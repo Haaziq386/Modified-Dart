@@ -4,6 +4,7 @@ from exp.exp_timedart import Exp_TimeDART
 from exp.exp_timedart_v2 import Exp_TimeDART_v2
 from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
+from exp.exp_multitask import Exp_MultiTask
 import random
 import numpy as np
 import os
@@ -230,6 +231,23 @@ parser.add_argument('--temperature', type=float, default=0.2, help='temperature'
 parser.add_argument('--masked_rule', type=str, default='geometric', help='geometric, random, masked tail, masked head')
 parser.add_argument('--mask_rate', type=float, default=0.5, help='mask ratio')
 
+# Multi-Task Joint Training
+parser.add_argument('--multi_task', type=int, default=0, 
+                   help='Enable multi-task joint training (0=False, 1=True)')
+parser.add_argument('--multi_task_lambda', type=float, default=0.5, 
+                   help='Weight for classification loss in multi-task training (0-1). '
+                        '0.5 = equal weighting, higher = more emphasis on classification')
+parser.add_argument('--multi_task_schedule', type=str, default='constant', 
+                   help='Schedule for lambda weight: constant, linear, cosine, warmup')
+parser.add_argument('--use_uncertainty_weighting', type=int, default=0, 
+                   help='Use automatic uncertainty-based loss weighting (0=False, 1=True)')
+parser.add_argument('--gradient_clip', type=float, default=1.0, 
+                   help='Gradient clipping value for multi-task stability')
+parser.add_argument('--cls_data', type=str, default=None,
+                   help='Classification dataset name (if different from forecast data)')
+parser.add_argument('--cls_root_path', type=str, default=None,
+                   help='Root path for classification data')
+
 
 args = parser.parse_args()
 args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
@@ -247,6 +265,7 @@ Exp_map = {
     "HtulTS": Exp_HtulTS,
     "TimeDART_v2": Exp_TimeDART_v2,
     "SimMTM": Exp_SimMTM,
+    "MultiTaskTimeDART": Exp_MultiTask,
 }
 
 Exp = Exp_map[args.model]
@@ -291,31 +310,50 @@ if args.task_name == "pretrain":
 elif args.task_name == "finetune":
     for ii in range(args.itr):
         # setting record of experiments
-        setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_decomp{}_per{}".format(
-            args.task_name,
-            args.model,
-            args.data,
-            args.features,
-            args.input_len,
-            args.label_len,
-            args.pred_len,
-            args.d_model,
-            args.d_ff,
-            args.n_heads,
-            args.e_layers,
-            args.d_layers,
-            args.factor,
-            args.dropout,
-            args.head_dropout,
-            args.train_epochs,
-            args.batch_size,
-            args.learning_rate,
-            args.use_decomposition,
-            args.period,
-            args.use_forgetting,
-            args.forgetting_type,
-            args.forgetting_rate,
-        )
+        if args.multi_task:
+            setting = "{}_{}_{}_{}_il{}_pl{}_dm{}_el{}_dp{}_ep{}_bs{}_lr{}_mt{}_lambda{}_schedule{}".format(
+                args.task_name,
+                args.model,
+                args.data,
+                args.features,
+                args.input_len,
+                args.pred_len,
+                args.d_model,
+                args.e_layers,
+                args.dropout,
+                args.train_epochs,
+                args.batch_size,
+                args.learning_rate,
+                args.multi_task,
+                args.multi_task_lambda,
+                args.multi_task_schedule,
+            )
+        else:
+            setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_decomp{}_per{}".format(
+                args.task_name,
+                args.model,
+                args.data,
+                args.features,
+                args.input_len,
+                args.label_len,
+                args.pred_len,
+                args.d_model,
+                args.d_ff,
+                args.n_heads,
+                args.e_layers,
+                args.d_layers,
+                args.factor,
+                args.dropout,
+                args.head_dropout,
+                args.train_epochs,
+                args.batch_size,
+                args.learning_rate,
+                args.use_decomposition,
+                args.period,
+                args.use_forgetting,
+                args.forgetting_type,
+                args.forgetting_rate,
+            )
 
         args.load_checkpoints = os.path.join(
             args.pretrain_checkpoints, args.data, args.transfer_checkpoints
@@ -324,15 +362,23 @@ elif args.task_name == "finetune":
         exp = Exp(args)  # set experiments
 
         print(">>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
-        if args.downstream_task == "forecast":
+        if args.multi_task:
+            # Multi-task joint training - works with MultiTaskTimeDART or HtulTS MultiTaskModel
+            if hasattr(exp, 'multi_task_train'):
+                exp.multi_task_train(setting)
+                print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+                exp.multi_task_test()
+            else:
+                exp.train(setting)
+                print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+                exp.test()
+                exp.cls_test()
+        elif args.downstream_task == "forecast":
             exp.train(setting)
-        elif args.downstream_task == "classification":
-            exp.cls_train(setting)
-            pass
-
-        print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
-        if args.downstream_task == "forecast":
+            print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
             exp.test()
         elif args.downstream_task == "classification":
+            exp.cls_train(setting)
+            print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
             exp.cls_test()
         torch.cuda.empty_cache()
