@@ -2,6 +2,96 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+class FrequencyEncoder(nn.Module):
+    """
+    Frequency-domain encoder using FFT.
+    Takes time-domain input and produces frequency embeddings.
+    """
+    def __init__(self, input_len, hidden_dim=512, dropout=0.2):
+        super(FrequencyEncoder, self).__init__()
+        self.input_len = input_len
+        self.hidden_dim = hidden_dim
+        
+        # FFT output size: L//2 + 1 complex values -> 2*(L//2+1) real values (amp + phase or real + imag)
+        self.fft_output_size = 2 * (input_len // 2 + 1)
+        
+        # Projection from frequency features to hidden_dim
+        self.freq_projection = nn.Sequential(
+            nn.Linear(self.fft_output_size, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+    
+    def forward(self, x):
+        """
+        Args:
+            x: [N, L] time-domain signal
+        Returns:
+            h_freq: [N, hidden_dim] frequency embeddings
+        """
+        # Compute FFT
+        spectrum = torch.fft.rfft(x, dim=-1)  # [N, L//2+1] complex
+        
+        # Extract amplitude and phase
+        amplitude = torch.abs(spectrum)  # [N, L//2+1]
+        phase = torch.angle(spectrum)     # [N, L//2+1]
+        
+        # Concatenate amplitude and phase
+        freq_features = torch.cat([amplitude, phase], dim=-1)  # [N, 2*(L//2+1)]
+        
+        # Project to hidden_dim
+        h_freq = self.freq_projection(freq_features)  # [N, hidden_dim]
+        
+        return h_freq
+
+
+class TFC_Loss(nn.Module):
+    """
+    Time-Frequency Consistency Loss using NT-Xent (Normalized Temperature-scaled Cross Entropy).
+    Maximizes similarity between time and frequency embeddings of the same sample
+    while minimizing similarity with other samples.
+    """
+    def __init__(self, temperature=0.2):
+        super(TFC_Loss, self).__init__()
+        self.temperature = temperature
+    
+    def forward(self, z_time, z_freq):
+        """
+        Args:
+            z_time: [N, hidden_dim] time-domain embeddings
+            z_freq: [N, hidden_dim] frequency-domain embeddings
+        Returns:
+            loss: scalar NT-Xent loss
+        """
+        batch_size = z_time.size(0)
+        
+        if batch_size < 2:
+            # NT-Xent requires at least 2 samples for contrastive learning
+            return torch.tensor(0.0, device=z_time.device, requires_grad=True)
+        
+        # Normalize embeddings
+        z_time = F.normalize(z_time, dim=-1)
+        z_freq = F.normalize(z_freq, dim=-1)
+        
+        # Compute cosine similarity matrix
+        # sim_tf[i,j] = similarity between z_time[i] and z_freq[j]
+        sim_tf = torch.matmul(z_time, z_freq.T) / self.temperature  # [N, N]
+        sim_ft = sim_tf.T  # [N, N]
+        
+        # Positive pairs are on the diagonal (same sample index)
+        labels = torch.arange(batch_size, device=z_time.device)
+        
+        # Cross-entropy loss: time->freq and freq->time
+        loss_tf = F.cross_entropy(sim_tf, labels)
+        loss_ft = F.cross_entropy(sim_ft, labels)
+        
+        # Average both directions
+        loss = (loss_tf + loss_ft) / 2.0
+        
+        return loss
+
+
 class ForgettingMechanisms(nn.Module):
     """
     Forgetting mechanisms for neural networks
@@ -58,8 +148,9 @@ class ForgettingMechanisms(nn.Module):
 
 class LightweightModel(nn.Module):
     """
-    Lightweight model with shared linear backbone:
-    - MLP backbone for both pretrain and forecasting
+    Lightweight model with Time-Frequency Consistency (TF-C) architecture:
+    - Time-domain MLP backbone + Frequency-domain encoder
+    - Contrastive learning between time and frequency representations
     - Conv layers ONLY for classification task
     """
     def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, 
@@ -72,35 +163,45 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
+        self.hidden_dim = 512
         
-        # SHARED LINEAR BACKBONE for pretrain and forecasting
-        hidden_dim = 512
-        self.linear_backbone = nn.Sequential(
-            nn.Linear(input_len, hidden_dim),
+        # TIME-DOMAIN BACKBONE (MLP)
+        self.time_backbone = nn.Sequential(
+            nn.Linear(input_len, self.hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.ReLU(),
             nn.Dropout(0.1)
         )
+        
+        # FREQUENCY-DOMAIN BACKBONE
+        self.freq_backbone = FrequencyEncoder(
+            input_len=input_len,
+            hidden_dim=self.hidden_dim,
+            dropout=0.2
+        )
+        
+        # TF-C Contrastive Loss
+        self.tfc_loss_fn = TFC_Loss(temperature=0.2)
 
-        # Forgetting mechanisms (applied after backbone)
+        # Forgetting mechanisms (applied after backbone fusion)
         if self.use_forgetting:
             self.forgetting_layer = ForgettingMechanisms(
-                hidden_dim, forgetting_type, forgetting_rate
+                self.hidden_dim, forgetting_type, forgetting_rate
             )
         
         # Task-specific heads
         if self.task_name == "pretrain":
-            # Reconstruction head
-            self.decoder = nn.Linear(hidden_dim, input_len)
+            # Reconstruction head (from fused representation)
+            self.decoder = nn.Linear(self.hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
             head_width = min(2048, max(64, 4*int(self.pred_len)))
 
             # Enhanced forecasting head with forgetting
             self.forecaster = nn.Sequential(
-                nn.Linear(hidden_dim, head_width),
+                nn.Linear(self.hidden_dim, head_width),
                 nn.ReLU(),
                 nn.Dropout(0.1),
                 nn.Linear(head_width, self.pred_len)
@@ -147,12 +248,12 @@ class LightweightModel(nn.Module):
         # Input: [batch_size, seq_len, num_features]
         batch_size, seq_len, num_features = x.size()
         
-        # 1. SHARED BACKBONE PASS (Applies to ALL tasks now)
+        # 1. DUAL BACKBONE PASS (Time + Frequency)
         # ---------------------------------------------------
         # Store clean signal for logic references if needed
         x_clean = x.clone()
         
-        # Add noise only if strictly pretraining
+        # Add noise only if strictly pretraining (applied before both encoders)
         if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
             x, noise = self.add_noise(x, noise_level=noise_level)
             
@@ -160,42 +261,51 @@ class LightweightModel(nn.Module):
         x_permuted = x.permute(0, 2, 1)
         x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
         
-        # Pass through the Pretrained Linear Backbone
-        # features shape: [batch * features, hidden_dim (512)]
-        features = self.linear_backbone(x_flat)
+        # Step A: Time-domain encoding
+        h_time = self.time_backbone(x_flat)  # [batch * features, hidden_dim]
+        
+        # Step B: Frequency-domain encoding
+        h_freq = self.freq_backbone(x_flat)  # [batch * features, hidden_dim]
+        
+        # Step C: Fusion (element-wise sum)
+        h_fused = h_time + h_freq  # [batch * features, hidden_dim]
 
-        # Apply forgetting if enabled
+        # Apply forgetting if enabled (on fused representation)
         if self.use_forgetting:
             is_finetune = (self.task_name == "finetune")
-            features = self.forgetting_layer(features, is_finetune=is_finetune)
+            h_fused = self.forgetting_layer(h_fused, is_finetune=is_finetune)
 
         # 2. TASK-SPECIFIC HEADS
         # ---------------------------------------------------
         
-        # CASE A: PRETRAINING (Reconstruction)
+        # CASE A: PRETRAINING (Reconstruction + TF-C Loss)
         if self.task_name == "pretrain":
-            # Reconstruction (denoising)
-            reconstruction = self.decoder(features)  # [batch*features, seq_len]
+            # Compute TF-C contrastive loss
+            loss_tfc = self.tfc_loss_fn(h_time, h_freq)
+            
+            # Reconstruction (denoising) from fused representation
+            reconstruction = self.decoder(h_fused)  # [batch*features, seq_len]
             reconstruction = reconstruction.view(batch_size, num_features, seq_len)
             reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
-            return reconstruction
+            
+            return reconstruction, loss_tfc
 
         # CASE B: FORECASTING (Finetune with pred_len)
         elif self.task_name == "finetune" and self.pred_len is not None:
-            predictions = self.forecaster(features)  # [batch*features, pred_len]
+            predictions = self.forecaster(h_fused)  # [batch*features, pred_len]
             predictions = predictions.view(batch_size, num_features, self.pred_len)
             predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
             return predictions
 
         # CASE C: CLASSIFICATION (Finetune without pred_len)
         else:
-            # Reshape features to be compatible with Conv1d
+            # Reshape fused features to be compatible with Conv1d
             # Backbone output: [Batch*Features, Hidden_Dim]
             # Conv Input Needed: [Batch, Channels, Length]
             # We map: Features -> Channels, Hidden_Dim -> Length
             
             # New shape: [Batch, Features, Hidden_Dim]
-            cnn_input = features.view(batch_size, num_features, -1)
+            cnn_input = h_fused.view(batch_size, num_features, -1)
             
             # Pass the PRETRAINED features into the CNN
             x = F.relu(self.conv1(cnn_input))
@@ -257,14 +367,15 @@ class Model(nn.Module):
             x = x / stdevs
 
         # Forward with noise (model will denoise)
-        predict_x = self.model(x, add_noise_flag=True, noise_level=self.noise_level)
+        # Returns: (reconstruction, loss_tfc)
+        predict_x, loss_tfc = self.model(x, add_noise_flag=True, noise_level=self.noise_level)
 
         # Denormalization
         if self.use_norm:
             predict_x = predict_x * stdevs
             predict_x = predict_x + means
 
-        return predict_x
+        return predict_x, loss_tfc
 
     def forecast(self, x):
         batch_size, input_len, num_features = x.size()
@@ -288,6 +399,7 @@ class Model(nn.Module):
     
     def forward(self, batch_x):
         if self.task_name == "pretrain":
+            # Returns: (reconstruction, loss_tfc)
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":
             return self.forecast(batch_x)
@@ -325,6 +437,7 @@ class ClsModel(nn.Module):
 
     def pretrain(self, x):
         # Add noise during pretrain
+        # Returns: (reconstruction, loss_tfc)
         return self.model(x, add_noise_flag=True, noise_level=self.noise_level)
 
     def forecast(self, x):
@@ -333,6 +446,7 @@ class ClsModel(nn.Module):
     
     def forward(self, batch_x):
         if self.task_name == "pretrain":
+            # Returns: (reconstruction, loss_tfc)
             return self.pretrain(batch_x)
         elif self.task_name == "finetune":
             return self.forecast(batch_x)
