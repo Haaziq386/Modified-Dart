@@ -64,7 +64,7 @@ class LightweightModel(nn.Module):
     """
     def __init__(self, in_channels, out_channels, task_name="pretrain", pred_len=None, 
                  num_classes=2, input_len=336, use_noise=False, 
-                 use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1):
+                 use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1, use_multivariate=True):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
@@ -72,9 +72,12 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
+        self.in_channels = in_channels
+        self.use_multivariate = use_multivariate
         
         # SHARED LINEAR BACKBONE for pretrain and forecasting
         hidden_dim = 512
+        
         self.linear_backbone = nn.Sequential(
             nn.Linear(input_len, hidden_dim),
             nn.ReLU(),
@@ -83,6 +86,19 @@ class LightweightModel(nn.Module):
             nn.ReLU(),
             nn.Dropout(0.1)
         )
+        
+        # Option 2: Direct multivariate processing
+        self.multivariate_backbone = nn.Sequential(
+            nn.Linear(input_len * in_channels, hidden_dim * 2),  # Flatten all features
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1)
+        )
+
+        # Choose which backbone to use
+        self.use_multivariate = True 
 
         # Forgetting mechanisms (applied after backbone)
         if self.use_forgetting:
@@ -93,18 +109,33 @@ class LightweightModel(nn.Module):
         # Task-specific heads
         if self.task_name == "pretrain":
             # Reconstruction head
-            self.decoder = nn.Linear(hidden_dim, input_len)
+            if hasattr(self, 'use_multivariate') and self.use_multivariate:
+                # For multivariate: decode from hidden_dim to seq_len * num_features
+                self.decoder = nn.Linear(hidden_dim, input_len * in_channels)
+            else:
+                # Original: decode from hidden_dim to seq_len (per feature)
+                self.decoder = nn.Linear(hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
             head_width = min(2048, max(64, 4*int(self.pred_len)))
 
-            # Enhanced forecasting head with forgetting
-            self.forecaster = nn.Sequential(
-                nn.Linear(hidden_dim, head_width),
-                nn.ReLU(),
-                nn.Dropout(0.1),
-                nn.Linear(head_width, self.pred_len)
-            )
+            # Enhanced forecasting head
+            if hasattr(self, 'use_multivariate') and self.use_multivariate:
+                # For multivariate: predict all features at once
+                self.forecaster = nn.Sequential(
+                    nn.Linear(hidden_dim, head_width),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(head_width, self.pred_len * in_channels)
+                )
+            else:
+                # Original: predict per feature
+                self.forecaster = nn.Sequential(
+                    nn.Linear(hidden_dim, head_width),
+                    nn.ReLU(),
+                    nn.Dropout(0.1),
+                    nn.Linear(head_width, self.pred_len)
+                )
    
         else:  # Classification (completely separate Conv architecture)
             # Conv layers ONLY for classification
@@ -156,13 +187,24 @@ class LightweightModel(nn.Module):
         if self.task_name == "pretrain" and add_noise_flag and self.use_noise:
             x, noise = self.add_noise(x, noise_level=noise_level)
             
-        # Flatten: [batch, seq_len, features] -> [batch * features, seq_len]
-        x_permuted = x.permute(0, 2, 1)
-        x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
-        
-        # Pass through the Pretrained Linear Backbone
-        # features shape: [batch * features, hidden_dim (512)]
-        features = self.linear_backbone(x_flat)
+        if self.use_multivariate:
+            # OPTION 2: Direct multivariate processing
+            # Flatten all dimensions: [batch, seq_len, features] -> [batch, seq_len * features]
+            x_flat_multivariate = x.reshape(batch_size, seq_len * num_features)
+            
+            # Pass through multivariate backbone
+            # features shape: [batch, hidden_dim]
+            features = self.multivariate_backbone(x_flat_multivariate)
+            
+        else:
+            # OPTION 1: Original feature-wise processing
+            # Flatten: [batch, seq_len, features] -> [batch * features, seq_len]
+            x_permuted = x.permute(0, 2, 1)
+            x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
+            
+            # Pass through the original Linear Backbone
+            # features shape: [batch * features, hidden_dim (512)]
+            features = self.linear_backbone(x_flat)
 
         # Apply forgetting if enabled
         if self.use_forgetting:
@@ -174,17 +216,29 @@ class LightweightModel(nn.Module):
         
         # CASE A: PRETRAINING (Reconstruction)
         if self.task_name == "pretrain":
-            # Reconstruction (denoising)
-            reconstruction = self.decoder(features)  # [batch*features, seq_len]
-            reconstruction = reconstruction.view(batch_size, num_features, seq_len)
-            reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
+            if self.use_multivariate:
+                # For multivariate: features is [batch, hidden_dim]
+                # Need to decode back to [batch, seq_len * num_features] then reshape
+                reconstruction_flat = self.decoder(features)  # [batch, input_len * num_features]
+                reconstruction = reconstruction_flat.view(batch_size, seq_len, num_features)
+            else:
+                # Original reconstruction logic
+                reconstruction = self.decoder(features)  # [batch*features, seq_len]
+                reconstruction = reconstruction.view(batch_size, num_features, seq_len)
+                reconstruction = reconstruction.permute(0, 2, 1)  # [batch, seq_len, num_features]
             return reconstruction
 
         # CASE B: FORECASTING (Finetune with pred_len)
         elif self.task_name == "finetune" and self.pred_len is not None:
-            predictions = self.forecaster(features)  # [batch*features, pred_len]
-            predictions = predictions.view(batch_size, num_features, self.pred_len)
-            predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
+            if self.use_multivariate:
+                # For multivariate: features is [batch, hidden_dim]
+                predictions_flat = self.forecaster(features)  # [batch, pred_len * num_features]
+                predictions = predictions_flat.view(batch_size, self.pred_len, num_features)
+            else:
+                # Original forecasting logic
+                predictions = self.forecaster(features)  # [batch*features, pred_len]
+                predictions = predictions.view(batch_size, num_features, self.pred_len)
+                predictions = predictions.permute(0, 2, 1)  # [batch, pred_len, num_features]
             return predictions
 
         # CASE C: CLASSIFICATION (Finetune without pred_len)
@@ -243,7 +297,8 @@ class Model(nn.Module):
             use_noise=self.use_noise,
             use_forgetting=self.use_forgetting,
             forgetting_type=self.forgetting_type,
-            forgetting_rate=self.forgetting_rate
+            forgetting_rate=self.forgetting_rate,
+            use_multivariate=getattr(args, 'use_multivariate', True)
         )
 
     def pretrain(self, x):

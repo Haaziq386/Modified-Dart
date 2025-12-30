@@ -221,6 +221,10 @@ parser.add_argument('--forgetting_type', type=str, default='activation',
 parser.add_argument('--forgetting_rate', type=float, default=0.1, 
                    help='forgetting strength (0.0=no forgetting, 1.0=complete forgetting)')
 
+# Multivariate mechanisms
+parser.add_argument('--use_multivariate', type=int, default=1, 
+                   help='use direct multivariate processing (0=feature-wise, 1=multivariate)')
+
 ## SimMTM 
 # Pre-train
 parser.add_argument('--lm', type=int, default=3, help='average masking length')
