@@ -32,7 +32,10 @@ for pred_len in 96 192 336 720; do
         --patience 3 \
         --learning_rate 0.0001 \
         --pct_start 0.3 \
-        --use_forgetting 1 \
+        --use_noise 0 \
+        --use_forgetting 0 \
         --forgetting_type activation \
-        --forgetting_rate 0.1
+        --forgetting_rate 0.1 \
+        --use_real_image 1 \
+        --projection_dim 128
 done

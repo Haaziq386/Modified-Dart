@@ -221,6 +221,16 @@ parser.add_argument('--forgetting_type', type=str, default='activation',
 parser.add_argument('--forgetting_rate', type=float, default=0.1, 
                    help='forgetting strength (0.0=no forgetting, 1.0=complete forgetting)')
 
+# TF-C (Time-Frequency Consistency) parameters
+parser.add_argument('--tfc_weight', type=float, default=0.05, 
+                   help='weight for TF-C contrastive loss (default: 0.05)')
+parser.add_argument('--tfc_warmup_steps', type=int, default=0, 
+                   help='number of steps to warm up TF-C weight (default: 0 = no warmup)')
+parser.add_argument('--use_real_imag', type=int, default=0, 
+                   help='use real/imag FFT features instead of amp/phase (0=False, 1=True)')
+parser.add_argument('--projection_dim', type=int, default=128, 
+                   help='dimension of contrastive projection heads (default: 128)')
+
 ## SimMTM 
 # Pre-train
 parser.add_argument('--lm', type=int, default=3, help='average masking length')

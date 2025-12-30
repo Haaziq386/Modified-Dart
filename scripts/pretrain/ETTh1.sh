@@ -24,10 +24,13 @@ python -u run.py \
     --lr_decay 0.9 \
     --learning_rate 0.0001 \
     --batch_size 16 \
-    --use_noise 1 \
-    --noise_level 0.15 \
+    --use_noise 0 \
     --train_epochs 50 \
     --gpu 2 \
-    --use_forgetting 1 \
+    --use_forgetting 0 \
     --forgetting_type activation \
-    --forgetting_rate 0.1
+    --forgetting_rate 0.1 \
+    --tfc_weight 0.05 \
+    --tfc_warmup_steps 500 \
+    --projection_dim 128 \
+    --use_real_image 1

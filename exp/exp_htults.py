@@ -143,6 +143,7 @@ class Exp_HtulTS(Exp_Basic):
 
     def pretrain_one_epoch(self, train_loader, model_optim, model_scheduler):
         train_loss = []
+        tfc_loss_list = []
         model_criterion = self._select_criterion()
 
         self.model.train()
@@ -154,12 +155,20 @@ class Exp_HtulTS(Exp_Basic):
             batch_x = batch_x.float().to(self.device)
             batch_y = batch_y.float().to(self.device)
 
-            pred_x = self.model(batch_x)
-            diff_loss = model_criterion(pred_x, batch_x)
-            diff_loss.backward()
+            # Model returns (reconstruction, loss_tfc) during pretrain
+            pred_x, loss_tfc = self.model(batch_x)
+            
+            # Reconstruction loss
+            recon_loss = model_criterion(pred_x, batch_x)
+            
+            # Total loss = reconstruction + TF-C contrastive loss
+            # Note: loss_tfc is already weighted by tfc_weight inside the model
+            total_loss = recon_loss + loss_tfc
+            total_loss.backward()
 
             model_optim.step()
-            train_loss.append(diff_loss.item())
+            train_loss.append(total_loss.item())
+            tfc_loss_list.append(loss_tfc.item())
 
         model_scheduler.step()
         train_loss = np.mean(train_loss)
@@ -178,9 +187,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
-                diff_loss = model_criterion(pred_x, batch_x)
-                vali_loss.append(diff_loss.item())
+                # Model returns (reconstruction, loss_tfc) during pretrain
+                pred_x, loss_tfc = self.model(batch_x)
+                recon_loss = model_criterion(pred_x, batch_x)
+                total_loss = recon_loss + loss_tfc
+                vali_loss.append(total_loss.item())
 
         vali_loss = np.mean(vali_loss)
 
