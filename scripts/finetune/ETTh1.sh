@@ -14,17 +14,15 @@ for pred_len in 96 192 336 720; do
         --learning_rate 0.0001 \
         --batch_size 16 \
         --train_epochs 50 \
-        --patience 3 \
-        --pct_start 0.3 \
+        --patience 5 \
+        --pct_start 0.2 \
         --lr_decay 0.5 \
         --lradj step \
-        --patience 3 \
-        --learning_rate 0.0001 \
-        --pct_start 0.3 \
+        --learning_rate 0.0003 \
         --use_noise 0 \
         --use_forgetting 0 \
         --forgetting_type activation \
         --forgetting_rate 0.1 \
-        --use_real_image 1 \
+        --use_real_imag 1 \
         --projection_dim 128
 done
