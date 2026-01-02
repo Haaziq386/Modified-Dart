@@ -126,5 +126,37 @@ sh scripts/pretrain/ETTh2.sh && sh scripts/finetune/ETTh2.sh
 - Test results and metrics saved to `./outputs/test_results/`
 - TensorBoard logs available in `./outputs/logs/`
 
+# QUICK_REFERENCE.sh - Copy-paste commands for logging
+
+# ============================================================
+# QUICK START - Copy and paste these commands
+# ============================================================
+
 # RUN EVERYTHING WITH LOGGING (RECOMMENDED):
 sh scripts/run_with_logs.sh ETTh1
+
+# RUN PRETRAIN ONLY:
+sh scripts/pretrain_ETTh1_with_logs.sh
+
+# RUN FINETUNE ONLY:
+sh scripts/finetune_ETTh1_with_logs.sh
+
+# RUN BOTH (CHAINED):
+sh scripts/pretrain_ETTh1_with_logs.sh && sh scripts/finetune_ETTh1_with_logs.sh
+
+# MANUAL LOG VIEWING:
+cat outputs/logs/pretrain_ETTh1_*.log | tail -50
+cat outputs/logs/finetune_ETTh1_*.log | tail -50
+ls -lh outputs/logs/
+
+# ============================================================
+# KEY POINTS:
+# ============================================================
+# 
+# 1. All logs saved to: outputs/logs/
+# 2. Log format: <phase>_<dataset>_<YYYYMMDD_HHMMSS>.log
+# 3. Output appears on terminal AND saved to file
+# 4. Supports any dataset name automatically
+# 5. Use log_viewer.sh to quickly check latest logs
+#
+# ============================================================
