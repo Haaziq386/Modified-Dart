@@ -125,3 +125,6 @@ sh scripts/pretrain/ETTh2.sh && sh scripts/finetune/ETTh2.sh
 - Fine-tuning checkpoints go to `./outputs/checkpoints/`
 - Test results and metrics saved to `./outputs/test_results/`
 - TensorBoard logs available in `./outputs/logs/`
+
+# RUN EVERYTHING WITH LOGGING (RECOMMENDED):
+sh scripts/run_with_logs.sh ETTh1
