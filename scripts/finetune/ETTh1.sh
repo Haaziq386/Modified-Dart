@@ -11,18 +11,19 @@ for pred_len in 96 192 336 720; do
         --label_len 48 \
         --pred_len $pred_len \
         --enc_in 7 \
+        --d_model 512 \
+        --patch_len 16 \
+        --stride 8 \
         --learning_rate 0.0001 \
         --batch_size 16 \
-        --train_epochs 50 \
         --patience 5 \
-        --pct_start 0.2 \
-        --lr_decay 0.5 \
         --lradj step \
-        --learning_rate 0.0003 \
+        --lr_decay 0.5 \
         --use_noise 0 \
-        --use_forgetting 0 \
-        --forgetting_type activation \
-        --forgetting_rate 0.1 \
+        --gpu 2 \
+        --use_forgetting 1 \
+        --forgetting_type adaptive \
+        --forgetting_rate 0.05 \
         --use_real_imag 1 \
         --projection_dim 128
 done

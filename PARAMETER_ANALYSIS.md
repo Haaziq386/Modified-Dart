@@ -99,11 +99,11 @@ These are only used for naming experiment folders, not for model behavior.
 - **Can remove**: Safe to remove for HtulTS scripts
 - **Impact if removed**: None for HtulTS model
 
-#### ⚠️ `--d_model` (32) - **NOT USED IN HtulTS**
+#### ⚠️ `--d_model` (32) - **USED IN HtulTS**
 - **Used in**: Transformer-based models
 - **HtulTS usage**: **NONE** - HtulTS uses its own hidden_dim (512 by default)
 - **Can remove**: Safe to remove for HtulTS scripts
-- **Impact if removed**: None for HtulTS model
+- **Impact if removed**: Will impact Patching
 
 #### ⚠️ `--d_ff` (64) - **NOT USED IN HtulTS**
 - **Used in**: Transformer-based models (feed-forward dimension)

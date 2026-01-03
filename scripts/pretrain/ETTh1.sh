@@ -8,6 +8,9 @@ python -u run.py \
     --features M \
     --input_len 336 \
     --enc_in 7 \
+    --d_model 512 \
+    --patch_len 16 \
+    --stride 8 \
     --learning_rate 0.00015 \
     --batch_size 16 \
     --use_noise 0 \
@@ -15,9 +18,7 @@ python -u run.py \
     --lr_decay 0.95 \
     --gpu 2 \
     --use_forgetting 0 \
-    --forgetting_type activation \
-    --forgetting_rate 0.1 \
-    --tfc_weight 0.1 \
+    --tfc_weight 0.05 \
     --tfc_warmup_steps 750 \
     --projection_dim 128 \
     --use_real_imag 1
