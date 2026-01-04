@@ -211,6 +211,9 @@ parser.add_argument('--noise_level', type=float, default=0.15, help='noise level
 parser.add_argument("--lr_decay", type=float, default=0.5, help="learning rate decay")
 parser.add_argument("--mask_ratio", type=float, default=1.0, help="mask ratio")
 
+# SSM model
+parser.add_argument('--state_dim', type=int, default=128, help='SSM state dimension')
+
 # Classification
 parser.add_argument("--num_classes", type=int, default=6, help="number of classes")
 

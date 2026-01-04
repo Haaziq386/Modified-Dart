@@ -4,6 +4,7 @@ python -u run.py \
     --data_path ETTh1.csv \
     --model_id ETTh1 \
     --model HtulTS \
+    --state_dim 128 \
     --data ETTh1 \
     --features M \
     --input_len 336 \

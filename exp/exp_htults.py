@@ -154,7 +154,12 @@ class Exp_HtulTS(Exp_Basic):
             batch_x = batch_x.float().to(self.device)
             batch_y = batch_y.float().to(self.device)
 
-            pred_x = self.model(batch_x)
+            out = self.model(batch_x)
+            # Support models that return either a single tensor or a tuple/list
+            if isinstance(out, (tuple, list)):
+                pred_x = out[0]
+            else:
+                pred_x = out
             diff_loss = model_criterion(pred_x, batch_x)
             diff_loss.backward()
 
@@ -178,7 +183,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
+                out = self.model(batch_x)
+                if isinstance(out, (tuple, list)):
+                    pred_x = out[0]
+                else:
+                    pred_x = out
                 diff_loss = model_criterion(pred_x, batch_x)
                 vali_loss.append(diff_loss.item())
 
@@ -228,7 +237,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
+                out = self.model(batch_x)
+                if isinstance(out, (tuple, list)):
+                    pred_x = out[0]
+                else:
+                    pred_x = out
 
                 f_dim = -1 if self.args.features == "MS" else 0
 
@@ -302,7 +315,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
+                out = self.model(batch_x)
+                if isinstance(out, (tuple, list)):
+                    pred_x = out[0]
+                else:
+                    pred_x = out
 
                 f_dim = -1 if self.args.features == "MS" else 0
 
@@ -338,7 +355,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
+                out = self.model(batch_x)
+                if isinstance(out, (tuple, list)):
+                    pred_x = out[0]
+                else:
+                    pred_x = out
 
                 f_dim = -1 if self.args.features == "MS" else 0
 
