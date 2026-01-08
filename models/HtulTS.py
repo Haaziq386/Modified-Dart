@@ -4,12 +4,114 @@ import torch.nn.functional as F
 import math
 
 
+class AdaptiveFrequencyWarping(nn.Module):
+    """
+    Lightweight, learnable monotonic frequency warping module.
+
+    - We parameterize a monotonic mapping g_theta by learning positive increments
+      between adjacent frequency bins. Monotonicity is enforced by applying
+      a positive activation (softplus) to the learned increments and taking a
+      cumulative sum. This guarantees a strictly non-decreasing grid.
+    - The cumulative grid is normalized to [0, 1] so that it represents
+      relative positions across the normalized frequency axis. Normalization
+      ensures the mapping covers the full frequency range and is numerically
+      stable across different bin counts.
+    - Resampling is done via linear interpolation (O(F)). Given the learned
+      positions for each original bin, we sample the input features at those
+      positions using vectorized floor/ceil interpolation. This is simple,
+      differentiable, and has minimal overhead compared to grid_sample.
+
+    Notes on shapes:
+    - Input:  [N, F, D] or [N, F]
+    - Output: [N, F, D] or [N, F] (matches input shape)
+    """
+    def __init__(self, num_bins, eps=1e-6):
+        super(AdaptiveFrequencyWarping, self).__init__()
+        if num_bins < 2:
+            raise ValueError("num_bins must be >= 2")
+        self.num_bins = int(num_bins)
+        self.eps = float(eps)
+
+        # We parameterize the (F) grid by learning (F-1) positive increments.
+        # The increments are passed through softplus to ensure positivity.
+        # Initializing to a roughly-uniform spacing helps training stability.
+        init_val = 1.0 / (self.num_bins - 1)
+        # inverse softplus: log(exp(x)-1)
+        inv_sp = math.log(math.exp(init_val) - 1.0)
+        self.raw_increments = nn.Parameter(torch.full((self.num_bins - 1,), inv_sp, dtype=torch.float))
+
+    def _compute_grid(self):
+        """
+        Returns a monotonic, normalized grid of shape [F] in [0, 1].
+
+        Steps:
+        - softplus(raw_increments) -> positive increments
+        - cumulative sum with leading 0 -> monotonic sequence of length F
+        - normalize by last element to ensure values lie in [0, 1]
+        """
+        increments = F.softplus(self.raw_increments)  # positive values, shape [F-1]
+        cum = torch.cat([torch.tensor([0.0], device=increments.device, dtype=increments.dtype),
+                         torch.cumsum(increments, dim=0)], dim=0)  # shape [F]
+        total = cum[-1].clamp(min=self.eps)
+        grid = cum / total
+        # numeric clamp to avoid tiny numerical drift
+        grid = grid.clamp(0.0, 1.0)
+        return grid  # [F]
+
+    def forward(self, freq_features):
+        """
+        freq_features: [N, F, D] or [N, F]
+        returns: warped features with same shape
+
+        We perform linear interpolation along the frequency axis using the
+        learned (monotonic) sampling positions.
+        """
+        # Ensure 3D tensor for simplicity: [N, F, D]
+        orig_ndim = freq_features.dim()
+        if orig_ndim == 2:
+            # [N, F] -> [N, F, 1]
+            freq = freq_features.unsqueeze(-1)
+        elif orig_ndim == 3:
+            freq = freq_features
+        else:
+            raise ValueError("freq_features must be 2D or 3D tensor")
+
+        N, Fbins, D = freq.shape
+        if Fbins != self.num_bins:
+            raise ValueError(f"Expected {self.num_bins} frequency bins, got {Fbins}")
+
+        device = freq.device
+        grid = self._compute_grid().to(device)  # [F]
+
+        # The learned grid gives the new position for each original bin in [0,1].
+        # We sample the original features at those positions using linear
+        # interpolation. Let positions p = [0,1] correspond to bin indices
+        # in [0, F-1] via scaled = p * (F-1).
+        scaled = grid * (Fbins - 1)
+        scaled = scaled.clamp(0.0, Fbins - 1.0)  # safety clamp
+
+        left_idx = torch.floor(scaled).long()  # [F]
+        right_idx = (left_idx + 1).clamp(max=Fbins - 1)
+        weight = (scaled - left_idx.float()).unsqueeze(0).unsqueeze(-1)  # [1, F, 1]
+
+        # Gather left and right values: use index_select for efficiency and clarity
+        left_vals = torch.index_select(freq, dim=1, index=left_idx.to(device))   # [N, F, D]
+        right_vals = torch.index_select(freq, dim=1, index=right_idx.to(device)) # [N, F, D]
+
+        warped = (1.0 - weight) * left_vals + weight * right_vals
+
+        # Return shape consistent with input
+        if orig_ndim == 2:
+            return warped.squeeze(-1)
+        return warped
+
+
 class FrequencyEncoder(nn.Module):
     """
     Frequency-domain encoder using FFT with improved stability.
     Takes time-domain input and produces frequency embeddings.
     """
-    def __init__(self, input_len, hidden_dim=512, dropout=0.2, use_real_imag=False):
+    def __init__(self, input_len, hidden_dim=512, dropout=0.2, use_real_imag=False, use_warping=False):
         super(FrequencyEncoder, self).__init__()
         self.input_len = input_len
         self.hidden_dim = hidden_dim
@@ -32,29 +134,53 @@ class FrequencyEncoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
+
+        # Adaptive warping flag and module (lightweight, O(F)). By default disabled
+        # to preserve original behavior. When enabled the warper learns a
+        # monotonic mapping of frequency bins and resamples the FFT features.
+        self.use_warping = use_warping
+        if self.use_warping:
+            self.warper = AdaptiveFrequencyWarping(self.num_freq_bins)
     
     def forward(self, x):
         # x: [N, L] time-domain signal
         x_windowed = x * self.hann_window
         spectrum = torch.fft.rfft(x_windowed, dim=-1)
-        
+
+        # Build frequency features in shape [N, F, D] so warping can operate
+        # along the frequency axis (dim=1). This supports both representations
+        # requested by the user.
         if self.use_real_imag:
+            # real & imag -> D = 2
             real_part = spectrum.real
             imag_part = spectrum.imag
-            freq_features = torch.cat([real_part, imag_part], dim=-1)
+            freq_features = torch.stack([real_part, imag_part], dim=-1)  # [N, F, 2]
         else:
+            # amplitude & sine/cosine of phase -> D = 3
             amplitude = torch.log1p(torch.abs(spectrum))
             phase = torch.angle(spectrum)
             sin_phase = torch.sin(phase)
             cos_phase = torch.cos(phase)
-            freq_features = torch.cat([amplitude, sin_phase, cos_phase], dim=-1)
-        
-        # Per-sample normalization
-        mean = freq_features.mean(dim=-1, keepdim=True)
-        std = freq_features.std(dim=-1, keepdim=True).clamp(min=1e-6)
+            freq_features = torch.stack([amplitude, sin_phase, cos_phase], dim=-1)  # [N, F, 3]
+
+        # Optional adaptive warping (keeps FFT unchanged; we only resample features)
+        if getattr(self, 'use_warping', False):
+            # ensure warper is on same device
+            self.warper.to(freq_features.device)
+            freq_features = self.warper(freq_features)  # [N, F, D]
+
+        # Per-sample normalization across frequency bins and channels for stability
+        mean = freq_features.mean(dim=(1, 2), keepdim=True)
+        std = freq_features.std(dim=(1, 2), keepdim=True).clamp(min=1e-6)
         freq_features = (freq_features - mean) / std
-        
-        h_freq = self.freq_projection(freq_features)
+
+        # Flatten back to [N, F*D] as expected by the projection
+        freq_flat = freq_features.view(freq_features.size(0), -1)
+
+        # Safety: avoid NaNs/Infs from numerical issues
+        freq_flat = torch.nan_to_num(freq_flat, nan=0.0, posinf=1e6, neginf=-1e6)
+
+        h_freq = self.freq_projection(freq_flat)
         return h_freq
 
 
@@ -264,7 +390,7 @@ class LightweightModel(nn.Module):
                  num_classes=2, input_len=336, use_noise=False, 
                  use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1,
                  tfc_weight=0.05, tfc_warmup_steps=0, use_real_imag=False,
-                 projection_dim=128, patch_len=16, stride=8):
+                 use_warping=False, projection_dim=128, patch_len=16, stride=8):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
@@ -272,6 +398,7 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
+        self.use_warping = use_warping
         self.hidden_dim = 512
         
         # Patch Config
@@ -312,7 +439,8 @@ class LightweightModel(nn.Module):
             input_len=input_len,
             hidden_dim=self.hidden_dim,
             dropout=0.2,
-            use_real_imag=use_real_imag
+            use_real_imag=use_real_imag,
+            use_warping=self.use_warping
         )
         
         # Projection heads for TF-C contrastive loss
@@ -497,6 +625,7 @@ class Model(nn.Module):
             tfc_weight=tfc_weight,
             tfc_warmup_steps=tfc_warmup_steps,
             use_real_imag=use_real_imag,
+            use_warping=getattr(args, 'use_warping', False),
             projection_dim=projection_dim,
             patch_len=patch_len,
             stride=stride
@@ -575,6 +704,7 @@ class ClsModel(nn.Module):
             tfc_weight=tfc_weight,
             tfc_warmup_steps=tfc_warmup_steps,
             use_real_imag=use_real_imag,
+            use_warping=getattr(args, 'use_warping', False),
             projection_dim=projection_dim,
             patch_len=patch_len,
             stride=stride

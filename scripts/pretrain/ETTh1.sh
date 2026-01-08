@@ -21,4 +21,5 @@ python -u run.py \
     --tfc_weight 0.05 \
     --tfc_warmup_steps 750 \
     --projection_dim 128 \
-    --use_real_imag 1
+    --use_real_imag 1 \
+    --use_warping 1

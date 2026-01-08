@@ -25,5 +25,6 @@ for pred_len in 96 192 336 720; do
         --forgetting_type adaptive \
         --forgetting_rate 0.05 \
         --use_real_imag 1 \
-        --projection_dim 128
+        --projection_dim 128 \
+        --use_warping 1 
 done
