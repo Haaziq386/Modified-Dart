@@ -3,7 +3,97 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
+class RevIN(nn.Module):
+    """
+    Reversible Instance Normalization.
+    Crucial for SOTA on ETTh1 to handle distribution shift.
+    """
+    def __init__(self, num_features, eps=1e-5, affine=True):
+        super(RevIN, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.affine = affine
+        if self.affine:
+            self._init_params()
+
+    def _init_params(self):
+        self.affine_weight = nn.Parameter(torch.ones(self.num_features))
+        self.affine_bias = nn.Parameter(torch.zeros(self.num_features))
+
+    def forward(self, x, mode:str):
+        if mode == 'norm':
+            self.mean = torch.mean(x, dim=1, keepdim=True).detach()
+            self.stdev = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + self.eps)
+            x = (x - self.mean) / self.stdev
+            if self.affine:
+                x = x * self.affine_weight + self.affine_bias
+            return x
+        elif mode == 'denorm':
+            if self.affine:
+                x = (x - self.affine_bias) / (self.affine_weight + 1e-10)
+            x = x * self.stdev + self.mean
+            return x
+
+class SpectrallyGatedMixerLayer(nn.Module):
+    """
+    Novelty: A Mixer layer where the Token Mixing is gated by Global Frequency Context.
+    
+    """
+    def __init__(self, num_patches, hidden_dim, dropout=0.1):
+        super(SpectrallyGatedMixerLayer, self).__init__()
+        
+        # 1. Token Mixing (Time interactions)
+        self.norm1 = nn.LayerNorm(hidden_dim)
+        self.token_mix = nn.Sequential(
+            nn.Linear(num_patches, num_patches),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 2. Channel Mixing (Feature interactions)
+        self.norm2 = nn.LayerNorm(hidden_dim)
+        self.channel_mix = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim * 4, hidden_dim)
+        )
+        
+        # 3. Spectral Gate (The Novelty)
+        # Projects global freq context [Batch, Hidden] -> [Batch, 1, Hidden]
+        self.freq_gate = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x, h_freq):
+        # x: [Batch, Patches, Hidden]
+        # h_freq: [Batch, Hidden]
+        
+        # --- Token Mixing Block ---
+        # Swap axes for mixing across patches: [B, H, P]
+        # This allows the model to "see" the whole sequence at once
+        y = self.norm1(x).transpose(1, 2)
+        y = self.token_mix(y).transpose(1, 2)
+        
+        # --- Spectral Gating ---
+        # Inject frequency info to scale the time features dynamically
+        gate = self.freq_gate(h_freq).unsqueeze(1) # Broadcast over patches
+        y = y * gate
+        
+        x = x + y # Residual 1
+        
+        # --- Channel Mixing Block ---
+        y = self.norm2(x)
+        y = self.channel_mix(y)
+        x = x + y # Residual 2
+        
+        return x
+    
 class FrequencyEncoder(nn.Module):
     """
     Frequency-domain encoder using FFT with improved stability.
@@ -255,7 +345,8 @@ class ResidualForecastingHead(nn.Module):
 class LightweightModel(nn.Module):
     """
     Updated LightweightModel with:
-    - Patching + Mixer Backbone (Time)
+    - RevIN for normalization
+    - Patching + SpectrallyGatedMixer Stack (Time)
     - Global FFT Backbone (Freq)
     - Masking for Pretraining
     - Learnable Fusion & TFC
@@ -264,7 +355,7 @@ class LightweightModel(nn.Module):
                  num_classes=2, input_len=336, use_noise=False, 
                  use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1,
                  tfc_weight=0.05, tfc_warmup_steps=0, use_real_imag=False,
-                 projection_dim=128, patch_len=16, stride=8):
+                 projection_dim=128, patch_len=16, stride=8, depth=3, hidden_dim=256):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
@@ -272,7 +363,9 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
-        self.hidden_dim = 512
+        self.hidden_dim = hidden_dim
+        self.depth = depth
+        self.in_channels = in_channels
         
         # Patch Config
         self.patch_len = patch_len
@@ -283,29 +376,28 @@ class LightweightModel(nn.Module):
         self.tfc_warmup_steps = tfc_warmup_steps
         self.register_buffer('_step_counter', torch.tensor(0, dtype=torch.long))
         
-        # 1. TIME-DOMAIN BACKBONE: Patch Embedding + Mixer Aggregation
+        # RevIN for normalization (Crucial for SOTA)
+        self.revin = RevIN(in_channels)
+        
+        # 1. TIME-DOMAIN BACKBONE: Patch Embedding + Stack of Spectrally-Gated Mixer Layers
         self.patch_embed = PatchEmbedding(input_len, self.patch_len, self.stride, self.hidden_dim)
         
-        # Calculate expected number of patches to size the Mixer correctly
-        # Note: PatchEmbedding calculates exact patches dynamically, but the linear layer 
-        # needs a fixed input size. We assume input_len is constant.
-        # Max patches logic: ceil((L-P)/S) + 1 approx. 
-        # We run a dummy pass to get exact dimension or calculate carefully.
-        # Calculation: (336 - 16)/8 + 2 (padding) approx 42 patches.
-        # To be safe, we can use a small adaptive pool or dynamic sizing if input varies, 
-        # but for fixed input_len, we calculate:
+        # Compute exact number of patches
         dummy_input = torch.zeros(1, input_len)
         dummy_patches = self.patch_embed(dummy_input) # [1, Num_Patches, Hidden]
         self.num_patches = dummy_patches.shape[1]
         
-        # MLP Mixer to aggregate patches into one global time vector
-        self.patch_mixer = nn.Sequential(
-            nn.Linear(self.num_patches * self.hidden_dim, self.hidden_dim),
-            nn.BatchNorm1d(self.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(self.hidden_dim, self.hidden_dim)
-        )
+        # Essential for Mixers to understand "order"
+        self.pos_embedding = nn.Parameter(torch.randn(1, self.num_patches, self.hidden_dim) * 0.02)
+
+        # Stack of Spectrally-Gated Mixer Layers
+        self.mixer_layers = nn.ModuleList([
+            SpectrallyGatedMixerLayer(self.num_patches, self.hidden_dim, dropout=0.1)
+            for _ in range(self.depth)
+        ])
+        
+        # Global pooling for aggregating patches to single time representation
+        self.global_pool = nn.AdaptiveAvgPool1d(1)
         
         # 2. FREQUENCY-DOMAIN BACKBONE (Global)
         self.freq_backbone = FrequencyEncoder(
@@ -322,7 +414,7 @@ class LightweightModel(nn.Module):
         self.tfc_loss_fn = TFC_Loss(temperature=0.2)
         self.fusion = LearnableFusion(self.hidden_dim)
 
-        # Forgetting
+        # Forgetting mechanisms
         if self.use_forgetting:
             self.forgetting_layer = ForgettingMechanisms(
                 self.hidden_dim, forgetting_type, forgetting_rate
@@ -342,7 +434,7 @@ class LightweightModel(nn.Module):
             self.conv3 = nn.Conv1d(128, 256, kernel_size=3, padding=1)
             self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
             self.dropout = nn.Dropout(0.2)
-            self.global_pool = nn.AdaptiveAvgPool1d(1)
+            self.global_pool_cls = nn.AdaptiveAvgPool1d(1)
             self.classifier = nn.Sequential(
                 nn.Linear(256, 128), nn.ReLU(), nn.Dropout(0.5), nn.Linear(128, num_classes)
             )
@@ -375,7 +467,13 @@ class LightweightModel(nn.Module):
     def forward(self, x, add_noise_flag=False, noise_level=0.1):
         batch_size, seq_len, num_features = x.size()
         
-        # 1. INPUT AUGMENTATION (Masking vs Noise)
+        # 1. REVERSIBLE INSTANCE NORMALIZATION (Crucial for SOTA)
+        # ---------------------------------------------------
+        # Do NOT normalize for classification tasks
+        if self.task_name != 'classification':
+            x = self.revin(x, 'norm')   
+        
+        # 2. INPUT AUGMENTATION (Masking vs Noise)
         # ---------------------------------------------------
         if self.task_name == "pretrain":
             # Default to Masking for SOTA results
@@ -386,29 +484,39 @@ class LightweightModel(nn.Module):
                 x_input, _ = self.random_masking(x, mask_ratio=0.4)
         else:
             x_input = x
-            
-        # Flatten: [B, L, C] -> [B*C, L]
+        
+        # 3. CHANNEL INDEPENDENCE: Flatten Batch and Features
+        # ---------------------------------------------------
+        # [B, L, C] -> [B, C, L] -> [B*C, L]
         x_permuted = x_input.permute(0, 2, 1) 
         x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
         
-        # Group IDs for TFC
+        # Group IDs for TFC (used to group samples by original batch)
         group_ids = torch.arange(batch_size, device=x.device).repeat_interleave(num_features)
         
-        # 2. DUAL BACKBONE
+        # 4. DUAL BACKBONE
         # ---------------------------------------------------
         
-        # A: Time Path (Patching + Mixing)
-        # 1. Patchify: [B*C, L] -> [B*C, Num_Patches, Hidden]
-        x_patches = self.patch_embed(x_flat) 
-        # 2. Flatten patches for Mixer: [B*C, Num_Patches * Hidden]
-        x_patches_flat = x_patches.view(x_patches.size(0), -1)
-        # 3. Mixer Aggregation -> [B*C, Hidden]
-        h_time = self.patch_mixer(x_patches_flat)
-        
-        # B: Frequency Path (Global) -> [B*C, Hidden]
+        # A: FREQUENCY PATH (Global context)
+        # [B*C, L] -> [B*C, Hidden]
         h_freq = self.freq_backbone(x_flat)
         
-        # 3. FUSION & FORGETTING
+        # B: TIME PATH (Patching + Stack of Spectrally-Gated Mixer Layers)
+        # 1. Patchify: [B*C, L] -> [B*C, Num_Patches, Hidden]
+        x_patches = self.patch_embed(x_flat)
+        
+        # 2. Stack of Spectrally-Gated Mixer Layers with Frequency Gating
+        # Pass frequency context to modulate each mixer layer
+        h_time_seq = x_patches  # [B*C, Patches, Hidden]
+        for mixer_layer in self.mixer_layers:
+            # Each layer receives frequency context to gate token mixing
+            h_time_seq = mixer_layer(h_time_seq, h_freq)
+        
+        # 3. Global Pooling to aggregate patches into single time representation
+        # [B*C, Patches, Hidden] -> [B*C, Hidden, Patches] -> [B*C, Hidden, 1] -> [B*C, Hidden]
+        h_time = self.global_pool(h_time_seq.transpose(1, 2)).squeeze(-1)
+        
+        # 5. FUSION & FORGETTING
         # ---------------------------------------------------
         h_fused = self.fusion(h_time, h_freq)
 
@@ -416,11 +524,12 @@ class LightweightModel(nn.Module):
             is_finetune = (self.task_name == "finetune")
             h_fused = self.forgetting_layer(h_fused, is_finetune=is_finetune)
 
-        # 4. TASK HEADS
+        # 6. TASK HEADS
         # ---------------------------------------------------
         
         # PRETRAIN
         if self.task_name == "pretrain":
+            # Contrastive Loss between Time and Frequency representations
             z_time = self.time_projection(h_time)
             z_freq = self.freq_projection(h_freq)
             loss_tfc = self.tfc_loss_fn(z_time, z_freq, group_ids=group_ids) * self.get_tfc_weight()
@@ -428,28 +537,41 @@ class LightweightModel(nn.Module):
             if self.training:
                 self.increment_step()
             
+            # Reconstruction: map fused representation back to sequence length
+            # [B*C, Hidden] -> [B*C, L]
             reconstruction = self.decoder(h_fused)
-            # Reshape: [B*C, L] -> [B, L, C]
+            # Reshape: [B*C, L] -> [B, C, L] -> [B, L, C]
             reconstruction = reconstruction.view(batch_size, num_features, seq_len).permute(0, 2, 1)
+            
+            # Denormalize with RevIN
+            reconstruction = self.revin(reconstruction, 'denorm')
             
             return reconstruction, loss_tfc
 
         # FINETUNE (Forecasting)
         elif self.task_name == "finetune" and self.pred_len is not None:
+            # Forecasting head: [B*C, Hidden] -> [B*C, Pred_Len]
             predictions = self.forecaster(h_fused)
-            # Reshape: [B*C, Pred] -> [B, Pred, C]
+            # Reshape: [B*C, Pred] -> [B, C, Pred] -> [B, Pred, C]
             predictions = predictions.view(batch_size, num_features, self.pred_len).permute(0, 2, 1)
+            
+            # Denormalize with RevIN
+            predictions = self.revin(predictions, 'denorm')
+            
             return predictions
 
         # CLASSIFICATION
         else:
+            # Reshape fused representation for CNN: [B*C, Hidden] -> [B, C, Hidden]
             cnn_input = h_fused.view(batch_size, num_features, -1)
             x = F.relu(self.conv1(cnn_input))
-            x = self.pool(x); x = self.dropout(x)
+            x = self.pool(x)
+            x = self.dropout(x)
             x = F.relu(self.conv2(x))
-            x = self.pool(x); x = self.dropout(x)
+            x = self.pool(x)
+            x = self.dropout(x)
             x = F.relu(self.conv3(x))
-            x = self.global_pool(x).squeeze(-1)
+            x = self.global_pool_cls(x).squeeze(-1)
             x = self.classifier(x)
             return x
 
@@ -482,6 +604,10 @@ class Model(nn.Module):
         # Patch params (Standard for ETTh1: P=16, S=8)
         patch_len = getattr(args, 'patch_len', 16)
         stride = getattr(args, 'stride', 8)
+        
+        # Mixer architecture params
+        depth = getattr(args, 'depth', 3)  # Number of mixer layers
+        hidden_dim = getattr(args, 'd_model', 256)  # Use d_model as hidden_dim
 
         self.model = LightweightModel(
             in_channels=args.enc_in,
@@ -499,7 +625,9 @@ class Model(nn.Module):
             use_real_imag=use_real_imag,
             projection_dim=projection_dim,
             patch_len=patch_len,
-            stride=stride
+            stride=stride,
+            depth=depth,
+            hidden_dim=hidden_dim
         )
 
     def pretrain(self, x):
@@ -560,6 +688,8 @@ class ClsModel(nn.Module):
         projection_dim = getattr(args, 'projection_dim', 128)
         patch_len = getattr(args, 'patch_len', 16)
         stride = getattr(args, 'stride', 8)
+        depth = getattr(args, 'depth', 3)  # Number of mixer layers
+        hidden_dim = getattr(args, 'd_model', 256)  # Use d_model as hidden_dim
         
         self.model = LightweightModel(
             in_channels=args.enc_in,
@@ -577,7 +707,9 @@ class ClsModel(nn.Module):
             use_real_imag=use_real_imag,
             projection_dim=projection_dim,
             patch_len=patch_len,
-            stride=stride
+            stride=stride,
+            depth=depth,
+            hidden_dim=hidden_dim
         )
 
     def pretrain(self, x):

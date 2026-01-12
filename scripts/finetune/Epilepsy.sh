@@ -5,32 +5,21 @@ python -u run.py \
     --model_id Epilepsy \
     --model HtulTS \
     --data Epilepsy \
-    --e_layers 2 \
-    --d_layers 1 \
     --input_len 206 \
     --enc_in 3 \
-    --dec_in 3 \
-    --c_out 3 \
     --num_classes 4 \
-    --n_heads 16 \
     --d_model 128 \
-    --d_ff 256 \
-    --patch_len 6 \
-    --stride 6 \
-    --head_dropout 0.1 \
-    --dropout 0.2 \
-    --time_steps 1000 \
-    --scheduler cosine \
+    --patch_len 16 \
+    --stride 8 \
+    --dropout 0.1 \
     --batch_size 16 \
-    --gpu 2 \
+    --gpu 0 \
     --lr_decay 1.0 \
     --lradj decay \
-    --scheduler cosine \
     --patience 100 \
     --learning_rate 0.001 \
-    --pct_start 0.3 \
     --train_epochs 100 \
     --use_norm 0 \
-    --use_forgetting 1 \
-    --forgetting_type activation \
-    --forgetting_rate 0.1
+    --use_forgetting 0 \
+    --use_real_imag 1 \
+    --projection_dim 128

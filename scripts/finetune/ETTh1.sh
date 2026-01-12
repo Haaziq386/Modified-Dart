@@ -14,16 +14,14 @@ for pred_len in 96 192 336 720; do
         --d_model 512 \
         --patch_len 16 \
         --stride 8 \
-        --learning_rate 0.0001 \
+        --learning_rate 0.0005 \
         --batch_size 16 \
         --patience 5 \
         --lradj step \
         --lr_decay 0.5 \
         --use_noise 0 \
         --gpu 2 \
-        --use_forgetting 1 \
-        --forgetting_type adaptive \
-        --forgetting_rate 0.05 \
+        --use_forgetting 0 \
         --use_real_imag 1 \
         --projection_dim 128
 done

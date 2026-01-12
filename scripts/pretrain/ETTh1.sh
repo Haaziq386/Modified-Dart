@@ -11,7 +11,7 @@ python -u run.py \
     --d_model 512 \
     --patch_len 16 \
     --stride 8 \
-    --learning_rate 0.00015 \
+    --learning_rate 0.0005 \
     --batch_size 16 \
     --use_noise 0 \
     --train_epochs 50 \
