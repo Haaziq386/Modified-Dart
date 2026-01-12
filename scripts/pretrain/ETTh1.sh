@@ -22,4 +22,11 @@ python -u run.py \
     --tfc_warmup_steps 750 \
     --projection_dim 128 \
     --use_real_imag 1 \
-    --use_warping 1
+    --use_warping 1 \
+    --tfc_warmup_steps 750 \
+    --use_cpc 1 \
+    --cpc_lambda 0.1 \
+    --cpc_freq_mask_ratio 0.2 \
+    --cpc_time_mask_ratio 0.2 \
+    --cpc_use_learned_mask 1 \
+    --cpc_loss_type l2

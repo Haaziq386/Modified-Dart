@@ -233,6 +233,23 @@ parser.add_argument('--projection_dim', type=int, default=128,
 parser.add_argument('--use_warping', type=int, default=0, 
                    help='enable adaptive frequency warping (0=False, 1=True)')
 
+# CPCTF (Cross-Modal Predictive Coding for TF) params
+parser.add_argument('--use_cpc', type=int, default=0,
+                    help='Enable CPCTF predictive loss during pretrain (0=False,1=True)')
+parser.add_argument('--cpc_freq_mask_ratio', type=float, default=0.2,
+                    help='Fraction of frequency bins to mask (band mask).')
+parser.add_argument('--cpc_time_mask_ratio', type=float, default=0.2,
+                    help='Fraction of time patches to mask.')
+parser.add_argument('--cpc_lambda', type=float, default=0.1,
+                    help='Weight for the CPC predictive loss added to TF-C.')
+parser.add_argument('--cpc_use_learned_mask', type=int, default=1,
+                    help='Use learned mask tokens (1=True, 0=False).')
+parser.add_argument('--cpc_loss_type', type=str, default='l2',
+                    help="Loss type for CPC: 'l2' or 'smoothl1'.")
+parser.add_argument('--cpc_pos_emb_dim', type=int, default=64,
+                    help='Dimensionality of positional embedding used by CPC predictors.')
+parser.add_argument('--cpc_hidden_dim', type=int, default=256,
+                    help='Hidden width of CPC predictor MLPs.')
 
 ## SimMTM 
 # Pre-train
