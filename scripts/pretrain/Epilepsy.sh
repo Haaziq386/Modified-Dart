@@ -14,6 +14,7 @@ python -u run.py \
     --dropout 0.1 \
     --lr_decay 0.95 \
     --learning_rate 0.001 \
+    --weight_decay 0.01 \
     --batch_size 16 \
     --train_epochs 50 \
     --use_noise 0 \

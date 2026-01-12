@@ -61,7 +61,12 @@ class Exp_HtulTS(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
-        model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        #was Adam before
+        model_optim = optim.AdamW(
+            self.model.parameters(),
+            lr=self.args.learning_rate,
+            weight_decay=self.args.weight_decay,
+        )
         return model_optim
 
     def _select_criterion(self):

@@ -178,6 +178,9 @@ parser.add_argument("--patience", type=int, default=3, help="early stopping pati
 parser.add_argument(
     "--learning_rate", type=float, default=0.0001, help="optimizer learning rate"
 )
+parser.add_argument(
+    "--weight_decay", type=float, default=0.01, help="optimizer weight decay"
+)
 parser.add_argument("--des", type=str, default="test", help="exp description")
 parser.add_argument("--loss", type=str, default="MSE", help="loss function")
 parser.add_argument("--lradj", type=str, default="decay", help="adjust learning rate")

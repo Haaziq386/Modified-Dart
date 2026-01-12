@@ -18,6 +18,7 @@ python -u run.py \
     --lradj decay \
     --patience 100 \
     --learning_rate 0.001 \
+    --weight_decay 0.01 \
     --train_epochs 100 \
     --use_norm 0 \
     --use_forgetting 0 \

@@ -8,15 +8,16 @@ python -u run.py \
     --features M \
     --input_len 336 \
     --enc_in 7 \
-    --d_model 512 \
+    --d_model 128 \
     --patch_len 16 \
     --stride 8 \
-    --learning_rate 0.0005 \
+    --learning_rate 0.0001 \
+    --weight_decay 0.01 \
     --batch_size 16 \
     --use_noise 0 \
     --train_epochs 50 \
     --lr_decay 0.95 \
-    --gpu 2 \
+    --gpu 0 \
     --use_forgetting 0 \
     --tfc_weight 0.05 \
     --tfc_warmup_steps 750 \

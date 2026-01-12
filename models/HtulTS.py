@@ -65,10 +65,7 @@ class SpectrallyGatedMixerLayer(nn.Module):
         
         # 3. Spectral Gate (The Novelty)
         # Projects global freq context [Batch, Hidden] -> [Batch, 1, Hidden]
-        self.freq_gate = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Sigmoid()
-        )
+        self.freq_gate = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, x, h_freq):
         # x: [Batch, Patches, Hidden]
@@ -82,7 +79,7 @@ class SpectrallyGatedMixerLayer(nn.Module):
         
         # --- Spectral Gating ---
         # Inject frequency info to scale the time features dynamically
-        gate = self.freq_gate(h_freq).unsqueeze(1) # Broadcast over patches
+        gate = 1 + torch.tanh(self.freq_gate(h_freq).unsqueeze(1))
         y = y * gate
         
         x = x + y # Residual 1
@@ -426,7 +423,14 @@ class LightweightModel(nn.Module):
             self.decoder = nn.Linear(self.hidden_dim, input_len)
         
         elif self.task_name == "finetune" and self.pred_len is not None:
-            self.forecaster = ResidualForecastingHead(self.hidden_dim, self.pred_len, dropout=0.1)
+            # SOTA Head: Flatten-LayerNorm-Dropout-Linear (from PatchTST)
+            # LayerNorm is batch-size invariant (works with batch size 1 or 16)
+            self.head_ln = nn.LayerNorm(self.hidden_dim * self.num_patches)
+            self.head_dropout = nn.Dropout(0.1)
+            self.head_proj = nn.Linear(self.hidden_dim * self.num_patches, self.pred_len)
+            # Linear trend branch to capture easy AR-style trends directly
+            self.linear_trend = nn.Linear(self.input_len, self.pred_len)
+            nn.init.normal_(self.linear_trend.weight, mean=0.0, std=0.01)
    
         else: # Classification
             self.conv1 = nn.Conv1d(in_channels, 64, kernel_size=5, padding=2)
@@ -550,15 +554,27 @@ class LightweightModel(nn.Module):
 
         # FINETUNE (Forecasting)
         elif self.task_name == "finetune" and self.pred_len is not None:
-            # Forecasting head: [B*C, Hidden] -> [B*C, Pred_Len]
-            predictions = self.forecaster(h_fused)
+            # SOTA Head: Flatten-LayerNorm-Dropout-Linear
+            # Use the sequence of patches from the mixer layers
+            h_seq = h_time_seq  # [B*C, Patches, Hidden]
+            # Flatten: [B*C, Patches * Hidden]
+            x_out = h_seq.reshape(batch_size * num_features, -1)
+            # Apply LayerNorm (BS-invariant, works with batch size 1 or 16)
+            x_out = self.head_ln(x_out)
+            # Apply Dropout
+            x_out = self.head_dropout(x_out)
+            # Project to prediction length
+            pred = self.head_proj(x_out)  # [B*C, Pred_Len]
+            # Linear trend bypass to capture simple trends without stressing the mixer
+            trend_pred = self.linear_trend(x_flat)  # [B*C, Pred_Len]
+            pred = pred + trend_pred
             # Reshape: [B*C, Pred] -> [B, C, Pred] -> [B, Pred, C]
-            predictions = predictions.view(batch_size, num_features, self.pred_len).permute(0, 2, 1)
+            pred = pred.reshape(batch_size, num_features, -1).permute(0, 2, 1)
             
             # Denormalize with RevIN
-            predictions = self.revin(predictions, 'denorm')
+            pred = self.revin(pred, 'denorm')
             
-            return predictions
+            return pred
 
         # CLASSIFICATION
         else:
