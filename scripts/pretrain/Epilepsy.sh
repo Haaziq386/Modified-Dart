@@ -9,11 +9,12 @@ python -u run.py \
     --enc_in 3 \
     --num_classes 4 \
     --d_model 128 \
-    --patch_len 16 \
-    --stride 8 \
+    --depth 4 \
+    --patch_len 8 \
+    --stride 4 \
     --dropout 0.1 \
     --lr_decay 0.95 \
-    --learning_rate 0.001 \
+    --learning_rate 0.0005 \
     --weight_decay 0.01 \
     --batch_size 16 \
     --train_epochs 50 \
@@ -21,8 +22,8 @@ python -u run.py \
     --gpu 0 \
     --use_norm 0 \
     --use_forgetting 0 \
-    --tfc_weight 0.05 \
-    --tfc_warmup_steps 750 \
+    --tfc_weight 0.1 \
+    --tfc_warmup_steps 300 \
     --projection_dim 128 \
-    --use_real_imag 1
-    
+    --use_real_imag 0 \
+    --use_disentanglement 0

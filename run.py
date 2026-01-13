@@ -234,6 +234,12 @@ parser.add_argument('--use_real_imag', type=int, default=0,
 parser.add_argument('--projection_dim', type=int, default=128, 
                    help='dimension of contrastive projection heads (default: 128)')
 
+# NEW: HtulTS v2 specific arguments
+parser.add_argument('--depth', type=int, default=4, 
+                   help='Number of mixer layers in HtulTS (default: 4)')
+parser.add_argument('--use_disentanglement', type=int, default=0, 
+                   help='Use SpectralTemporalDisentanglement module (0=False, 1=True)')
+
 ## SimMTM 
 # Pre-train
 parser.add_argument('--lm', type=int, default=3, help='average masking length')

@@ -9,18 +9,20 @@ python -u run.py \
     --enc_in 3 \
     --num_classes 4 \
     --d_model 128 \
-    --patch_len 16 \
-    --stride 8 \
-    --dropout 0.1 \
+    --depth 4 \
+    --patch_len 8 \
+    --stride 4 \
+    --dropout 0.2 \
     --batch_size 16 \
     --gpu 0 \
-    --lr_decay 1.0 \
+    --lr_decay 0.98 \
     --lradj decay \
-    --patience 100 \
-    --learning_rate 0.001 \
+    --patience 15 \
+    --learning_rate 0.0005 \
     --weight_decay 0.01 \
     --train_epochs 100 \
     --use_norm 0 \
     --use_forgetting 0 \
-    --use_real_imag 1 \
-    --projection_dim 128
+    --use_real_imag 0 \
+    --projection_dim 128 \
+    --use_disentanglement 0

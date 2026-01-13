@@ -9,6 +9,7 @@ python -u run.py \
     --input_len 336 \
     --enc_in 7 \
     --d_model 128 \
+    --depth 4 \
     --patch_len 16 \
     --stride 8 \
     --learning_rate 0.0001 \
@@ -18,8 +19,8 @@ python -u run.py \
     --train_epochs 50 \
     --lr_decay 0.95 \
     --gpu 0 \
-    --use_forgetting 0 \
     --tfc_weight 0.05 \
-    --tfc_warmup_steps 750 \
+    --tfc_warmup_steps 500 \
     --projection_dim 128 \
-    --use_real_imag 1
+    --use_real_imag 1 \
+    --use_disentanglement 0

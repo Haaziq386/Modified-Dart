@@ -12,17 +12,20 @@ for pred_len in 96 192 336 720; do
         --pred_len $pred_len \
         --enc_in 7 \
         --d_model 128 \
+        --depth 4 \
         --patch_len 16 \
         --stride 8 \
         --learning_rate 0.0001 \
         --weight_decay 0.01 \
         --batch_size 16 \
         --patience 5 \
+        --train_epochs 10 \
         --lradj step \
         --lr_decay 0.5 \
         --use_noise 0 \
         --gpu 0 \
         --use_forgetting 0 \
         --use_real_imag 1 \
-        --projection_dim 128
+        --projection_dim 128 \
+        --use_disentanglement 0
 done
