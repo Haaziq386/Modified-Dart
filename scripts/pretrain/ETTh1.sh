@@ -8,7 +8,7 @@ python -u run.py \
     --features M \
     --input_len 336 \
     --enc_in 7 \
-    --d_model 512 \
+    --d_model 128 \
     --patch_len 16 \
     --stride 8 \
     --learning_rate 0.00015 \

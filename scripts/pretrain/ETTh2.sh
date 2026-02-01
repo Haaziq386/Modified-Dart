@@ -6,7 +6,7 @@ python -u run.py \
     --model HtulTS \
     --data ETTh2 \
     --features M \
-    --input_len 336 \
+    --input_len 96 \
     --e_layers 2 \
     --d_layers 1 \
     --enc_in 7 \

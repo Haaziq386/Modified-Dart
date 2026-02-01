@@ -31,6 +31,4 @@ python -u run.py \
     --pct_start 0.3 \
     --train_epochs 100 \
     --use_norm 0 \
-    --use_forgetting 1 \
-    --forgetting_type activation \
-    --forgetting_rate 0.1
+    --use_forgetting 0

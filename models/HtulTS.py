@@ -80,11 +80,11 @@ class PatchEmbedding(nn.Module):
 
     def forward(self, x):
         # x: [Batch * Features, Seq_Len]
-        n_vars = x.shape[1]
+        seq_len = x.shape[1]
         
         # 1. Padding to ensure we cover the whole sequence
         if self.stride > 0:
-            padding = self.stride - ((n_vars - self.patch_len) % self.stride)
+            padding = self.stride - ((seq_len - self.patch_len) % self.stride)
             if padding < self.stride:
                  x = F.pad(x, (0, padding), "replicate")
         
@@ -264,7 +264,7 @@ class LightweightModel(nn.Module):
                  num_classes=2, input_len=336, use_noise=False, 
                  use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1,
                  tfc_weight=0.05, tfc_warmup_steps=0, use_real_imag=False,
-                 projection_dim=128, patch_len=16, stride=8):
+                 projection_dim=128, patch_len=16, stride=8, hidden_dim=512):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
@@ -272,7 +272,7 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
-        self.hidden_dim = 512
+        self.hidden_dim = hidden_dim
         
         # Patch Config
         self.patch_len = patch_len
@@ -337,7 +337,7 @@ class LightweightModel(nn.Module):
             self.forecaster = ResidualForecastingHead(self.hidden_dim, self.pred_len, dropout=0.1)
    
         else: # Classification
-            self.conv1 = nn.Conv1d(in_channels, 64, kernel_size=5, padding=2)
+            self.conv1 = nn.Conv1d(self.hidden_dim, 64, kernel_size=5, padding=2)
             self.conv2 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
             self.conv3 = nn.Conv1d(128, 256, kernel_size=3, padding=1)
             self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
@@ -372,15 +372,14 @@ class LightweightModel(nn.Module):
         x_masked = x * (~mask) # Zero out masked values
         return x_masked, mask
 
-    def forward(self, x, add_noise_flag=False, noise_level=0.1):
+    def forward(self, x, noise_level=0.1):
         batch_size, seq_len, num_features = x.size()
         
         # 1. INPUT AUGMENTATION (Masking vs Noise)
         # ---------------------------------------------------
         if self.task_name == "pretrain":
-            # Default to Masking for SOTA results
-            # Only use Noise if explicitly requested via args AND flag
-            if self.use_noise and add_noise_flag:
+            # Pretraining augmentation: noise or masking
+            if self.use_noise:
                 x_input, _ = self.add_noise(x, noise_level=noise_level)
             else:
                 x_input, _ = self.random_masking(x, mask_ratio=0.4)
@@ -391,8 +390,8 @@ class LightweightModel(nn.Module):
         x_permuted = x_input.permute(0, 2, 1) 
         x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
         
-        # Group IDs for TFC
-        group_ids = torch.arange(batch_size, device=x.device).repeat_interleave(num_features)
+        # Group IDs for TFC - each sample-feature pair is independent
+        group_ids = torch.arange(batch_size * num_features, device=x.device)
         
         # 2. DUAL BACKBONE
         # ---------------------------------------------------
@@ -443,13 +442,19 @@ class LightweightModel(nn.Module):
 
         # CLASSIFICATION
         else:
-            cnn_input = h_fused.view(batch_size, num_features, -1)
+            # h_fused: [B*C, Hidden] -> reshape to [B, C, Hidden]
+            h_fused_3d = h_fused.view(batch_size, num_features, self.hidden_dim)
+            
+            # Transpose for Conv1d: [B, C, Hidden] -> [B, Hidden, C]
+            cnn_input = h_fused_3d.transpose(1, 2)
+            
+            # Forward through CNN: [B, Hidden, C]
             x = F.relu(self.conv1(cnn_input))
             x = self.pool(x); x = self.dropout(x)
             x = F.relu(self.conv2(x))
             x = self.pool(x); x = self.dropout(x)
             x = F.relu(self.conv3(x))
-            x = self.global_pool(x).squeeze(-1)
+            x = self.global_pool(x).squeeze(-1)  # [B, 256]
             x = self.classifier(x)
             return x
 
@@ -499,7 +504,8 @@ class Model(nn.Module):
             use_real_imag=use_real_imag,
             projection_dim=projection_dim,
             patch_len=patch_len,
-            stride=stride
+            stride=stride,
+            hidden_dim=args.d_model
         )
 
     def pretrain(self, x):
@@ -510,11 +516,11 @@ class Model(nn.Module):
             stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
             x = x / stdevs
 
-        predict_x, loss_tfc = self.model(x, add_noise_flag=True, noise_level=self.noise_level)
+        predict_x, loss_tfc = self.model(x, noise_level=self.noise_level)
 
         if self.use_norm:
-            predict_x = predict_x * stdevs
-            predict_x = predict_x + means
+            predict_x = predict_x * stdevs[:, 0, :].unsqueeze(1).repeat(1, self.input_len, 1)
+            predict_x = predict_x + means[:, 0, :].unsqueeze(1).repeat(1, self.input_len, 1)
 
         return predict_x, loss_tfc
 
@@ -526,7 +532,7 @@ class Model(nn.Module):
             stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
             x = x / stdevs
 
-        prediction = self.model(x, add_noise_flag=False)
+        prediction = self.model(x)
 
         if self.use_norm:
             prediction = prediction * stdevs[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
@@ -577,14 +583,15 @@ class ClsModel(nn.Module):
             use_real_imag=use_real_imag,
             projection_dim=projection_dim,
             patch_len=patch_len,
-            stride=stride
+            stride=stride,
+            hidden_dim=args.d_model
         )
 
     def pretrain(self, x):
-        return self.model(x, add_noise_flag=True, noise_level=self.noise_level)
+        return self.model(x, noise_level=self.noise_level)
 
     def forecast(self, x):
-        return self.model(x, add_noise_flag=False)
+        return self.model(x)
     
     def forward(self, batch_x):
         if self.task_name == "pretrain":
