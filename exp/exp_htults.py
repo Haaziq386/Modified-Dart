@@ -42,9 +42,24 @@ class Exp_HtulTS(Exp_Basic):
 
             # Load to CPU first to handle checkpoints saved on different GPU devices
             state_dict = torch.load(self.args.load_checkpoints, map_location='cpu')
-            model.load_state_dict(state_dict, strict=False)  # strict=False allows missing keys (e.g., head)
+            if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+                state_dict = state_dict["model_state_dict"]
 
-        if torch.cuda.device_count() > 1:
+            model_state = model.state_dict()
+            filtered_state = OrderedDict()
+            skipped = []
+            for k, v in state_dict.items():
+                if k in model_state and model_state[k].shape == v.shape:
+                    filtered_state[k] = v
+                else:
+                    skipped.append(k)
+
+            if skipped:
+                print(f"Skipped {len(skipped)} keys due to shape/name mismatch: {skipped[:10]}")
+
+            model.load_state_dict(filtered_state, strict=False)  # strict=False allows missing keys (e.g., head)
+
+        if self.args.use_multi_gpu and torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!", self.args.device_ids)
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
 
