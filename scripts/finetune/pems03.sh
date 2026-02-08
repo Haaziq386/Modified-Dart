@@ -16,19 +16,24 @@ for pred_len in 12 24 36 48; do
         --dec_in 358 \
         --c_out 358 \
         --n_heads 8 \
-        --d_model 512 \
+        --d_model 128 \
         --d_ff 512 \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --dropout 0.2 \
         --head_dropout 0.1 \
-        --batch_size 32 \
-        --gpu 0 \
+        --batch_size 8 \
+        --gpu 3 \
         --lr_decay 0.5 \
         --lradj step \
         --time_steps 1000 \
         --scheduler cosine \
         --patience 3 \
         --learning_rate 0.0005 \
-        --pct_start 0.3
+        --pct_start 0.3 \
+        --train_epochs 10 \
+        --use_noise 0 \
+        --use_forgetting 0 \
+        --projection_dim 128 \
+        --use_real_imag 1
 done

@@ -1,30 +1,31 @@
 #!/bin/bash
 
-# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on ETTh1 dataset
-# Usage: bash scripts/compare_dmodel_ETTh1.sh
+# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on PEMS03 dataset
+# Usage: bash scripts/compare_dmodel_pems03.sh
 
 set -o pipefail  # Exit if any command in a pipe fails, but allow individual commands to fail
 
-DATASET="ETTh1"
+DATASET="PEMS03"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="./outputs/logs/dmodel_comparison_${TIMESTAMP}"
-RESULTS_DIR="./outputs/test_results/dmodel_comparison_${TIMESTAMP}"
+LOG_DIR="./outputs/logs/dmodel_comparison_pems03_${TIMESTAMP}"
+RESULTS_DIR="./outputs/test_results/dmodel_comparison_pems03_${TIMESTAMP}"
 
 # Create directories
 mkdir -p "$LOG_DIR"
 mkdir -p "$RESULTS_DIR"
 
 # Test different input lengths
-INPUT_LENS=(96 192 336)
+INPUT_LENS=(48 96 192 336)
 
 # Test different d_model values
-D_MODELS=(32 64 128) #(8 16 32 64 128)
+D_MODELS=(8 16 32 64 128)
 
-# Prediction lengths (same as input length comparison scripts)
-PRED_LENS=(96 192 336 720)
+# PEMS03 specific settings
+PRED_LENS=(12 24 36 48)
+ENC_IN=358
 
-# GPU allocation (all models use GPU 0)
-GPU=0
+# GPU allocation
+GPU=3
 
 echo "=========================================="
 echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART"
@@ -39,7 +40,7 @@ echo ""
 
 # Create results summary file
 SUMMARY_FILE="$RESULTS_DIR/comparison_summary.txt"
-echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on ETTh1" > "$SUMMARY_FILE"
+echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on PEMS03" > "$SUMMARY_FILE"
 echo "Timestamp: $TIMESTAMP" >> "$SUMMARY_FILE"
 echo "======================================================" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
@@ -56,28 +57,38 @@ run_htults_pretrain() {
 
     python -u run.py \
         --task_name pretrain \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model HtulTS \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
-        --enc_in 7 \
+        --e_layers 2 \
+        --d_layers 1 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
+        --n_heads 8 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
-        --learning_rate 0.0001 \
-        --batch_size 16 \
-        --use_noise 0 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
+        --head_dropout 0.1 \
+        --dropout 0.2 \
+        --time_steps 1000 \
+        --scheduler cosine \
+        --lr_decay 0.9 \
+        --learning_rate 0.0005 \
+        --batch_size 8 \
         --train_epochs 50 \
-        --lr_decay 0.95 \
-        --gpu $GPU \
+        --use_noise 0 \
         --use_forgetting 0 \
         --tfc_weight 0.05 \
         --tfc_warmup_steps 750 \
         --projection_dim 128 \
         --use_real_imag 1 \
+        --gpu $GPU \
         2>&1 | tee "$log_file"
 
     echo "    ✓ HtulTS pretrain completed for input_len=$input_len, d_model=$d_model"
@@ -95,29 +106,41 @@ run_htults_finetune() {
 
     python -u run.py \
         --task_name finetune \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --is_training 1 \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model HtulTS \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
         --label_len 48 \
         --pred_len $pred_len \
-        --enc_in 7 \
+        --e_layers 2 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
+        --n_heads 8 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
-        --learning_rate 0.0001 \
-        --batch_size 16 \
-        --patience 5 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
+        --dropout 0.2 \
+        --head_dropout 0.1 \
+        --batch_size 8 \
         --lr_decay 0.5 \
-        --lradj decay \
+        --lradj step \
+        --time_steps 1000 \
+        --scheduler cosine \
+        --patience 3 \
+        --learning_rate 0.0005 \
+        --pct_start 0.3 \
+        --train_epochs 10 \
         --use_noise 0 \
-        --gpu $GPU \
         --use_forgetting 0 \
-        --use_real_imag 1 \
         --projection_dim 128 \
+        --use_real_imag 1 \
+        --gpu $GPU \
         2>&1 | tee "$log_file"
 
     echo "    ✓ HtulTS finetune completed for input_len=$input_len, pred_len=$pred_len, d_model=$d_model"
@@ -136,29 +159,39 @@ run_simmtm_pretrain() {
 
     python -u run.py \
         --task_name pretrain \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
-        --enc_in 7 \
+        --e_layers 2 \
+        --d_layers 1 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
+        --n_heads 8 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
-        --learning_rate 0.0001 \
-        --batch_size 16 \
-        --use_noise 0 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
+        --head_dropout 0.1 \
+        --dropout 0.2 \
+        --time_steps 1000 \
+        --scheduler cosine \
+        --lr_decay 0.9 \
+        --learning_rate 0.0005 \
+        --batch_size 8 \
         --train_epochs 50 \
-        --lr_decay 0.95 \
-        --gpu $GPU \
+        --use_noise 0 \
         --use_forgetting 0 \
-        --tfc_weight 0.05 \
-        --tfc_warmup_steps 750 \
+        --tfc_weight 0.1 \
+        --tfc_warmup_steps 1000 \
         --projection_dim 128 \
         --use_real_imag 1 \
+        --gpu $GPU \
         2>&1 | tee "$log_file"
 
     echo "    ✓ SimMTM pretrain completed for input_len=$input_len, d_model=$d_model"
@@ -176,30 +209,44 @@ run_simmtm_finetune() {
 
     python -u run.py \
         --task_name finetune \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --is_training 1 \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
         --label_len 48 \
         --pred_len $pred_len \
-        --enc_in 7 \
+        --e_layers 2 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
+        --n_heads 8 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
-        --learning_rate 0.0001 \
-        --batch_size 16 \
-        --patience 5 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
+        --dropout 0.2 \
+        --head_dropout 0.1 \
+        --batch_size 8 \
         --lr_decay 0.5 \
-        --lradj decay \
+        --lradj step \
+        --time_steps 1000 \
+        --scheduler cosine \
+        --patience 3 \
+        --learning_rate 0.0005 \
+        --pct_start 0.3 \
+        --train_epochs 10 \
         --use_noise 0 \
-        --gpu $GPU \
         --use_forgetting 0 \
-        --use_real_imag 1 \
+        --tfc_weight 0.1 \
+        --tfc_warmup_steps 1000 \
         --projection_dim 128 \
+        --use_real_imag 1 \
+        --gpu $GPU \
         2>&1 | tee "$log_file"
 
     echo "    ✓ SimMTM finetune completed for input_len=$input_len, pred_len=$pred_len, d_model=$d_model"
@@ -218,30 +265,30 @@ run_timedart_pretrain() {
 
     python -u run.py \
         --task_name pretrain \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
         --e_layers 2 \
         --d_layers 1 \
-        --enc_in 7 \
-        --dec_in 7 \
-        --c_out 7 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
         --n_heads 8 \
         --d_model $d_model \
-        --d_ff 32 \
-        --patch_len 2 \
-        --stride 2 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
         --head_dropout 0.1 \
         --dropout 0.2 \
         --time_steps 1000 \
         --scheduler cosine \
-        --lr_decay 0.95 \
-        --learning_rate 0.0001 \
-        --batch_size 16 \
+        --lr_decay 0.9 \
+        --learning_rate 0.0005 \
+        --batch_size 8 \
         --train_epochs 50 \
         --gpu $GPU \
         2>&1 | tee "$log_file"
@@ -262,35 +309,36 @@ run_timedart_finetune() {
     python -u run.py \
         --task_name finetune \
         --is_training 1 \
-        --root_path ./datasets/ETT-small/ \
-        --data_path ETTh1.csv \
-        --model_id ETTh1_len${input_len}_dm${d_model} \
+        --root_path ./datasets/PEMS/ \
+        --data_path PEMS03.npz \
+        --model_id PEMS03_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data ETTh1 \
+        --data PEMS03 \
         --features M \
         --input_len $input_len \
         --label_len 48 \
         --pred_len $pred_len \
         --e_layers 2 \
-        --enc_in 7 \
-        --dec_in 7 \
-        --c_out 7 \
+        --enc_in $ENC_IN \
+        --dec_in $ENC_IN \
+        --c_out $ENC_IN \
         --n_heads 8 \
         --d_model $d_model \
-        --d_ff 32 \
-        --patch_len 2 \
-        --stride 2 \
-        --dropout 0.4 \
+        --d_ff 512 \
+        --patch_len 16 \
+        --stride 8 \
+        --dropout 0.2 \
         --head_dropout 0.1 \
-        --batch_size 16 \
-        --gpu $GPU \
+        --batch_size 8 \
         --lr_decay 0.5 \
-        --lradj decay \
+        --lradj step \
         --time_steps 1000 \
         --scheduler cosine \
         --patience 3 \
-        --learning_rate 0.0001 \
+        --learning_rate 0.0005 \
         --pct_start 0.3 \
+        --train_epochs 10 \
+        --gpu $GPU \
         2>&1 | tee "$log_file"
 
     echo "    ✓ TimeDART finetune completed for input_len=$input_len, pred_len=$pred_len, d_model=$d_model"

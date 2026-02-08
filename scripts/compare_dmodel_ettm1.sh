@@ -24,7 +24,7 @@ D_MODELS=(32 64 128) #(8 16 32 64 128)
 PRED_LENS=(96 192 336 720)
 
 # GPU allocation (all models use GPU 0)
-GPU=0
+GPU=1
 
 echo "=========================================="
 echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART"
@@ -65,8 +65,8 @@ run_htults_pretrain() {
         --input_len $input_len \
         --enc_in 7 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --learning_rate 0.0001 \
         --batch_size 16 \
         --use_noise 0 \
@@ -106,8 +106,8 @@ run_htults_finetune() {
         --pred_len $pred_len \
         --enc_in 7 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --learning_rate 0.0001 \
         --batch_size 16 \
         --patience 5 \
@@ -146,8 +146,8 @@ run_simmtm_pretrain() {
         --seq_len $input_len \
         --enc_in 7 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --learning_rate 0.0001 \
         --batch_size 16 \
         --use_noise 0 \
@@ -188,8 +188,8 @@ run_simmtm_finetune() {
         --pred_len $pred_len \
         --enc_in 7 \
         --d_model $d_model \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --learning_rate 0.0001 \
         --batch_size 16 \
         --patience 5 \
@@ -233,8 +233,8 @@ run_timedart_pretrain() {
         --n_heads 8 \
         --d_model $d_model \
         --d_ff 32 \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --head_dropout 0.1 \
         --dropout 0.2 \
         --time_steps 1000 \
@@ -278,8 +278,8 @@ run_timedart_finetune() {
         --n_heads 8 \
         --d_model $d_model \
         --d_ff 32 \
-        --patch_len 2 \
-        --stride 2 \
+        --patch_len 16 \
+        --stride 8 \
         --dropout 0.4 \
         --head_dropout 0.1 \
         --batch_size 16 \

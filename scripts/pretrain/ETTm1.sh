@@ -13,7 +13,7 @@ python -u run.py \
     --dec_in 7 \
     --c_out 7 \
     --n_heads 8 \
-    --d_model 32 \
+    --d_model 128 \
     --d_ff 64 \
     --patch_len 2 \
     --stride 2 \
@@ -25,4 +25,10 @@ python -u run.py \
     --learning_rate 0.0001 \
     --batch_size 64 \
     --train_epochs 50 \
-    --gpu 1
+    --use_noise 0 \
+    --use_forgetting 0 \
+    --tfc_weight 0.05 \
+    --tfc_warmup_steps 750 \
+    --projection_dim 128 \
+    --use_real_imag 1 \
+    --gpu 2

@@ -2,7 +2,7 @@ python -u run.py \
     --task_name pretrain \
     --root_path ./datasets/ETT-small/ \
     --data_path ETTh1.csv \
-    --model_id ETTh1 \
+    --model_id ETTh1_len336_dm128 \
     --model HtulTS \
     --data ETTh1 \
     --features M \
@@ -11,14 +11,14 @@ python -u run.py \
     --d_model 128 \
     --patch_len 16 \
     --stride 8 \
-    --learning_rate 0.00015 \
+    --learning_rate 0.0001 \
     --batch_size 16 \
     --use_noise 0 \
     --train_epochs 50 \
     --lr_decay 0.95 \
     --gpu 2 \
     --use_forgetting 0 \
-    --tfc_weight 0.05 \
-    --tfc_warmup_steps 750 \
+    --tfc_weight 0.1 \
+    --tfc_warmup_steps 100 \
     --projection_dim 128 \
-    --use_real_imag 1
+    --use_real_imag 1 
