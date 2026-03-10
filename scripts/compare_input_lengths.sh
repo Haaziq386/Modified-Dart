@@ -220,7 +220,6 @@ extract_metrics() {
     
     mse=$(grep -E "[0-9]+->[0-9]+, mse:" "$log_file" 2>/dev/null | tail -1 | grep -oP "mse:\K[0-9.]+" 2>/dev/null || echo "N/A")
     mae=$(grep -E "[0-9]+->[0-9]+, mse:" "$log_file" 2>/dev/null | tail -1 | grep -oP "mae:\K[0-9.]+" 2>/dev/null || echo "N/A")
-    fi
     
     echo "$model_name | Input=$input_len | Pred=$pred_len | MSE: $mse | MAE: $mae" >> "$SUMMARY_FILE"
     return 0
