@@ -16,7 +16,7 @@ mkdir -p "$LOG_DIR"
 mkdir -p "$RESULTS_DIR"
 
 # Base parameters (same as ETTh1.sh)
-INPUT_LEN=336
+INPUT_LENS=(96 192)
 PRED_LENS=(96 192 336 720)
 GPU=2
 
@@ -24,6 +24,7 @@ echo "=========================================="
 echo "HtulTS Hyperparameter Comparison on ETTh1"
 echo "Dataset: $DATASET"
 echo "Timestamp: $TIMESTAMP"
+echo "Input lengths: ${INPUT_LENS[@]}"
 echo "Prediction lengths: ${PRED_LENS[@]}"
 echo "GPU: $GPU"
 echo "=========================================="
@@ -76,7 +77,8 @@ run_pretrain() {
     local use_forgetting=$5
     local forgetting_rate=$6
     local forgetting_type=$7
-    local log_file="$LOG_DIR/pretrain_${config_name}.log"
+    local input_len=$8
+    local log_file="$LOG_DIR/pretrain_${config_name}_in${input_len}.log"
 
     echo ">>> Running PRETRAIN for config: $config_name"
     echo "    TFC Weight: $tfc_weight, Warmup: $tfc_warmup_steps, Real/Imag: $use_real_imag"
@@ -87,11 +89,11 @@ run_pretrain() {
         --task_name pretrain \
         --root_path ./datasets/ETT-small/ \
         --data_path ETTh1.csv \
-        --model_id ETTh1_${config_name} \
+        --model_id ETTh1_${config_name}_in${input_len} \
         --model HtulTS \
         --data ETTh1 \
         --features M \
-        --input_len $INPUT_LEN \
+        --input_len $input_len \
         --enc_in 7 \
         --d_model 128 \
         --patch_len 16 \
@@ -120,7 +122,8 @@ run_finetune() {
     local pred_len=$2
     local use_real_imag=$3
     local use_forgetting=$4
-    local log_file="$LOG_DIR/finetune_${config_name}_pred${pred_len}.log"
+    local input_len=$5
+    local log_file="$LOG_DIR/finetune_${config_name}_in${input_len}_pred${pred_len}.log"
 
     echo ">>> Running FINETUNE for config: $config_name, pred_len=$pred_len"
     echo "    Log: $log_file"
@@ -129,11 +132,11 @@ run_finetune() {
         --task_name finetune \
         --root_path ./datasets/ETT-small/ \
         --data_path ETTh1.csv \
-        --model_id ETTh1_${config_name} \
+        --model_id ETTh1_${config_name}_in${input_len} \
         --model HtulTS \
         --data ETTh1 \
         --features M \
-        --input_len $INPUT_LEN \
+        --input_len $input_len \
         --label_len 48 \
         --pred_len $pred_len \
         --enc_in 7 \
@@ -160,10 +163,11 @@ extract_metrics() {
     local log_file=$1
     local config_name=$2
     local pred_len=$3
+    local input_len=$4
 
     # Extract test MSE and MAE from log file
     if [ ! -f "$log_file" ]; then
-        echo "$config_name | Pred=$pred_len | MSE: FILE_NOT_FOUND | MAE: N/A" >> "$SUMMARY_FILE"
+        echo "$config_name | In=$input_len | Pred=$pred_len | MSE: FILE_NOT_FOUND | MAE: N/A" >> "$SUMMARY_FILE"
         return 0
     fi
 
@@ -177,30 +181,38 @@ extract_metrics() {
         mae="N/A"
     fi
 
-    printf "%-20s | Pred=%-4s | MSE: %-10s | MAE: %-10s\n" "$config_name" "$pred_len" "$mse" "$mae" >> "$SUMMARY_FILE"
+    printf "%-20s | In=%-4s | Pred=%-4s | MSE: %-10s | MAE: %-10s\n" "$config_name" "$input_len" "$pred_len" "$mse" "$mae" >> "$SUMMARY_FILE"
     return 0
 }
 
 # ============== Main Execution Loop ==============
+
+for input_len in "${INPUT_LENS[@]}"; do
+    echo ""
+    echo "=========================================="
+    echo "Testing Input Length: $input_len"
+    echo "=========================================="
+    echo ""
 
 for config in "${CONFIGS[@]}"; do
     IFS='|' read -r config_name tfc_weight tfc_warmup_steps use_real_imag use_forgetting forgetting_rate forgetting_type <<< "$config"
     
     echo ""
     echo "=========================================="
-    echo "Testing Configuration: $config_name"
+    echo "Testing Configuration: $config_name (input_len=$input_len)"
     echo "=========================================="
     echo ""
 
     # Pretrain
-    echo "Starting pretraining for $config_name..."
-    run_pretrain "$config_name" "$tfc_weight" "$tfc_warmup_steps" "$use_real_imag" "$use_forgetting" "$forgetting_rate" "$forgetting_type" || {
+    echo "Starting pretraining for $config_name (input_len=$input_len)..."
+    run_pretrain "$config_name" "$tfc_weight" "$tfc_warmup_steps" "$use_real_imag" "$use_forgetting" "$forgetting_rate" "$forgetting_type" "$input_len" || {
         echo "ERROR: Pretrain failed for $config_name"
     }
 
     echo "" >> "$SUMMARY_FILE"
     echo "========================================" >> "$SUMMARY_FILE"
     echo "Configuration: $config_name" >> "$SUMMARY_FILE"
+    echo "  Input Length: $input_len" >> "$SUMMARY_FILE"
     echo "  TFC Weight: $tfc_weight" >> "$SUMMARY_FILE"
     echo "  TFC Warmup Steps: $tfc_warmup_steps" >> "$SUMMARY_FILE"
     echo "  Use Real/Imag: $use_real_imag" >> "$SUMMARY_FILE"
@@ -218,17 +230,24 @@ for config in "${CONFIGS[@]}"; do
         echo "--- Testing pred_len = $pred_len ---"
         echo ""
 
-        run_finetune "$config_name" "$pred_len" "$use_real_imag" "$use_forgetting" || {
+        run_finetune "$config_name" "$pred_len" "$use_real_imag" "$use_forgetting" "$input_len" || {
             echo "WARNING: Finetune encountered an issue for $config_name, pred_len=$pred_len"
         }
 
         # Extract metrics
-        extract_metrics "$LOG_DIR/finetune_${config_name}_pred${pred_len}.log" "$config_name" "$pred_len"
+        extract_metrics "$LOG_DIR/finetune_${config_name}_in${input_len}_pred${pred_len}.log" "$config_name" "$pred_len" "$input_len"
     done
 
     echo "" >> "$SUMMARY_FILE"
     echo "" >> "$SUMMARY_FILE"
-    echo "Completed configuration: $config_name"
+    echo "Completed configuration: $config_name (input_len=$input_len)"
+    echo ""
+done
+
+    echo "" >> "$SUMMARY_FILE"
+    echo "==========================================">> "$SUMMARY_FILE"
+    echo "" >> "$SUMMARY_FILE"
+    echo "Completed all configurations for input_len=$input_len"
     echo ""
 done
 

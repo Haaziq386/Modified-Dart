@@ -1,6 +1,6 @@
 import os
 import torch
-from models import TimeDART, HtulTS, SimMTM, PatchTST, TimeDART_v2
+from models import HtulTS, TimeDART, SimMTM, PatchTST, TimeDART_v2
 
 
 class Exp_Basic(object):

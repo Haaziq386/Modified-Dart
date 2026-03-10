@@ -128,11 +128,12 @@ class Model(nn.Module):
         bs, seq_len, n_vars = x_enc.shape
 
         # normalization
-        means = torch.sum(x_enc, dim=1) / torch.sum(mask == 1, dim=1)
+        valid_counts = torch.sum(mask == 1, dim=1).to(x_enc.dtype).clamp_min(1.0)
+        means = torch.sum(x_enc, dim=1) / valid_counts
         means = means.unsqueeze(1).detach()
         x_enc = x_enc - means
         x_enc = x_enc.masked_fill(mask == 0, 0)
-        stdev = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) / torch.sum(mask == 1, dim=1) + 1e-5)
+        stdev = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) / valid_counts + 1e-5)
         stdev = stdev.unsqueeze(1).detach()
         x_enc /= stdev
 
@@ -169,11 +170,12 @@ class Model(nn.Module):
         bs, seq_len, n_vars = x_enc.shape
 
         # normalization
-        means = torch.sum(x_enc, dim=1) / torch.sum(mask == 1, dim=1)
+        valid_counts = torch.sum(mask == 1, dim=1).to(x_enc.dtype).clamp_min(1.0)
+        means = torch.sum(x_enc, dim=1) / valid_counts
         means = means.unsqueeze(1).detach()
         x_enc = x_enc - means
         x_enc = x_enc.masked_fill(mask == 0, 0)
-        stdev = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) / torch.sum(mask == 1, dim=1) + 1e-5)
+        stdev = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) / valid_counts + 1e-5)
         stdev = stdev.unsqueeze(1).detach()
         x_enc /= stdev
 

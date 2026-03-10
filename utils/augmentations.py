@@ -29,6 +29,11 @@ def geom_noise_mask_single(L, lm, masking_ratio):
     Returns:
         (L,) boolean numpy array intended to mask ('drop') with 0s a sequence of length L
     """
+    if masking_ratio <= 0:
+        return np.ones(L, dtype=bool)
+    if masking_ratio >= 1:
+        return np.zeros(L, dtype=bool)
+
     keep_mask = np.ones(L, dtype=bool)
     p_m = 1 / lm  # probability of each masking sequence stopping. parameter of geometric distribution.
     p_u = p_m * masking_ratio / (
@@ -85,7 +90,17 @@ def noise_mask(X, masking_ratio=0.25, lm=3, distribution='geometric', exclude_fe
     else:  # each position is independent Bernoulli with p = 1 - masking_ratio
         mask = np.random.choice(np.array([True, False]), size=X.shape, replace=True,
                                 p=(1 - masking_ratio, masking_ratio))
-    return torch.tensor(mask)
+    mask = torch.tensor(mask, dtype=torch.bool)
+
+    # Prevent fully-masked sequences for any (batch, variable), which can cause
+    # divide-by-zero in masked normalization.
+    all_masked = ~mask.any(dim=-1)
+    if all_masked.any():
+        b_idx, c_idx = torch.where(all_masked)
+        t_idx = torch.randint(0, mask.shape[-1], (b_idx.numel(),), device=mask.device)
+        mask[b_idx, c_idx, t_idx] = True
+
+    return mask
 
 
 def one_hot_encoding(X):

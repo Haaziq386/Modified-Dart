@@ -3,10 +3,11 @@ python -u run.py \
     --root_path ./datasets/PEMS/ \
     --data_path PEMS03.npz \
     --model_id PEMS03 \
-    --model HtulTS \
+    --model SimMTM \
     --data PEMS03 \
     --features M \
     --input_len 96 \
+    --seq_len 96 \
     --e_layers 2 \
     --d_layers 1 \
     --enc_in 358 \
@@ -26,9 +27,13 @@ python -u run.py \
     --batch_size 8 \
     --train_epochs 50 \
     --use_noise 0 \
-    --use_forgetting 0 \
+    --use_forgetting 1 \
+    --forgetting_type activation \
+    --forgetting_rate 0.1 \
     --tfc_weight 0.05 \
     --tfc_warmup_steps 750 \
     --projection_dim 128 \
     --use_real_imag 1 \
-    --gpu 3
+    --positive_nums 1 \
+    --select_channels 0.5 \
+    --gpu 0

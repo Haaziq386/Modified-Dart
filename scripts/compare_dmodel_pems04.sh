@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on PEMS03 dataset
-# Usage: bash scripts/compare_dmodel_pems03.sh
+# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on PEMS04 dataset
+# Usage: bash scripts/compare_dmodel_PEMS04.sh
 
 set -o pipefail  # Exit if any command in a pipe fails, but allow individual commands to fail
 
-DATASET="PEMS03"
+DATASET="PEMS04"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="./outputs/logs/dmodel_comparison_pems03_${TIMESTAMP}"
-RESULTS_DIR="./outputs/test_results/dmodel_comparison_pems03_${TIMESTAMP}"
+LOG_DIR="./outputs/logs/dmodel_comparison_PEMS04_${TIMESTAMP}"
+RESULTS_DIR="./outputs/test_results/dmodel_comparison_PEMS04_${TIMESTAMP}"
 
 # Create directories
 mkdir -p "$LOG_DIR"
@@ -20,12 +20,12 @@ INPUT_LENS=(12 24 36 48 96 192)
 # Test different d_model values
 D_MODELS=(128)
 
-# PEMS03 specific settings
+# PEMS04 specific settings
 PRED_LENS=(12 24 36 48)
 ENC_IN=358
 
 # GPU allocation[]
-GPU=3
+GPU=2
 
 echo "=========================================="
 echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART"
@@ -40,7 +40,7 @@ echo ""
 
 # Create results summary file
 SUMMARY_FILE="$RESULTS_DIR/comparison_summary.txt"
-echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on PEMS03" > "$SUMMARY_FILE"
+echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on PEMS04" > "$SUMMARY_FILE"
 echo "Timestamp: $TIMESTAMP" >> "$SUMMARY_FILE"
 echo "======================================================" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
@@ -60,13 +60,12 @@ run_htults_pretrain() {
         python -u run.py \
             --task_name pretrain \
             --root_path ./datasets/PEMS/ \
-            --data_path PEMS03.npz \
-            --model_id PEMS03_len${input_len}_dm${d_model}_${run_tag} \
+            --data_path PEMS04.npz \
+            --model_id PEMS04_len${input_len}_dm${d_model}_${run_tag} \
             --model HtulTS \
-            --data PEMS03 \
+            --data PEMS04 \
             --features M \
             --input_len $input_len \
-            --seq_len $input_len \
             --e_layers 2 \
             --d_layers 1 \
             --enc_in $ENC_IN \
@@ -93,7 +92,6 @@ run_htults_pretrain() {
             --tfc_warmup_steps 750 \
             --projection_dim 128 \
             --use_real_imag 1 \
-            --num_workers 0 \
             --gpu $GPU \
             2>&1 | tee "$log_file"
     done
@@ -118,10 +116,10 @@ run_htults_finetune() {
             --task_name finetune \
             --is_training 1 \
             --root_path ./datasets/PEMS/ \
-            --data_path PEMS03.npz \
-            --model_id PEMS03_len${input_len}_dm${d_model}_${run_tag} \
+            --data_path PEMS04.npz \
+            --model_id PEMS04_len${input_len}_dm${d_model}_${run_tag} \
             --model HtulTS \
-            --data PEMS03 \
+            --data PEMS04 \
             --features M \
             --input_len $input_len \
             --seq_len $input_len \
@@ -153,8 +151,6 @@ run_htults_finetune() {
             --forgetting_rate 0.1 \
             --projection_dim 128 \
             --use_real_imag 1 \
-            --load_checkpoints "" \
-            --num_workers 0 \
             --gpu $GPU \
             2>&1 | tee "$log_file"
     done
@@ -176,10 +172,10 @@ run_simmtm_pretrain() {
     python -u run.py \
         --task_name pretrain \
         --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --data_path PEMS04.npz \
+        --model_id PEMS04_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data PEMS03 \
+        --data PEMS04 \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
@@ -228,10 +224,10 @@ run_simmtm_finetune() {
         --task_name finetune \
         --is_training 1 \
         --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --data_path PEMS04.npz \
+        --model_id PEMS04_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data PEMS03 \
+        --data PEMS04 \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
@@ -283,10 +279,10 @@ run_timedart_pretrain() {
     python -u run.py \
         --task_name pretrain \
         --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --data_path PEMS04.npz \
+        --model_id PEMS04_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data PEMS03 \
+        --data PEMS04 \
         --features M \
         --input_len $input_len \
         --e_layers 2 \
@@ -329,14 +325,14 @@ run_timedart_finetune() {
         --task_name finetune \
         --is_training 1 \
         --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --data_path PEMS04.npz \
+        --model_id PEMS04_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data PEMS03 \
+        --data PEMS04 \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
-        --label_len $label_len \
+            --label_len $label_len \
         --pred_len $pred_len \
         --e_layers 2 \
         --enc_in $ENC_IN \

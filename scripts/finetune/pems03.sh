@@ -8,8 +8,9 @@ for pred_len in 12 24 36 48; do
         --model HtulTS \
         --data PEMS03 \
         --features M \
-        --input_len 96 \
-        --label_len 48 \
+        --input_len 12 \
+        --seq_len 12 \
+        --label_len 12 \
         --pred_len $pred_len \
         --e_layers 2 \
         --enc_in 358 \
@@ -33,7 +34,11 @@ for pred_len in 12 24 36 48; do
         --pct_start 0.3 \
         --train_epochs 10 \
         --use_noise 0 \
-        --use_forgetting 0 \
+        --use_forgetting 1 \
+        --forgetting_type activation \
+        --forgetting_rate 0.1 \
         --projection_dim 128 \
-        --use_real_imag 1
+        --use_real_imag 1 \
+        --load_checkpoints "" \
+        --num_workers 0
 done

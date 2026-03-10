@@ -95,6 +95,7 @@ class Dataset_PEMS(Dataset):
         self.seq_len = size[0]
         self.label_len = size[1]
         self.pred_len = size[2]
+        self.effective_label_len = min(self.label_len, self.seq_len)
         # init
         assert flag in ['train', 'test', 'val']
         type_map = {'train': 0, 'val': 1, 'test': 2}
@@ -137,13 +138,13 @@ class Dataset_PEMS(Dataset):
     def __getitem__(self, index):
         s_begin = index
         s_end = s_begin + self.seq_len
-        r_begin = s_end - self.label_len
-        r_end = r_begin + self.label_len + self.pred_len
+        r_begin = s_end - self.effective_label_len
+        r_end = r_begin + self.effective_label_len + self.pred_len
 
         seq_x = self.data_x[s_begin:s_end]
         seq_y = self.data_y[r_begin:r_end]
         seq_x_mark = torch.zeros((seq_x.shape[0], 1))
-        seq_y_mark = torch.zeros((seq_x.shape[0], 1))
+        seq_y_mark = torch.zeros((seq_y.shape[0], 1))
 
         return seq_x, seq_y, seq_x_mark, seq_y_mark
 

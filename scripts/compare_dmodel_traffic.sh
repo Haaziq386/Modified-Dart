@@ -1,31 +1,31 @@
 #!/bin/bash
 
-# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on PEMS03 dataset
-# Usage: bash scripts/compare_dmodel_pems03.sh
+# Script to compare HtulTS vs SimMTM vs TimeDART for various d_model values on Traffic dataset
+# Usage: bash scripts/compare_dmodel_traffic.sh
 
 set -o pipefail  # Exit if any command in a pipe fails, but allow individual commands to fail
 
-DATASET="PEMS03"
+DATASET="Traffic"
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="./outputs/logs/dmodel_comparison_pems03_${TIMESTAMP}"
-RESULTS_DIR="./outputs/test_results/dmodel_comparison_pems03_${TIMESTAMP}"
+LOG_DIR="./outputs/logs/dmodel_comparison_traffic_${TIMESTAMP}"
+RESULTS_DIR="./outputs/test_results/dmodel_comparison_traffic_${TIMESTAMP}"
 
 # Create directories
 mkdir -p "$LOG_DIR"
 mkdir -p "$RESULTS_DIR"
 
 # Test different input lengths
-INPUT_LENS=(12 24 36 48 96 192)
+INPUT_LENS=(96 192 336 512)
 
 # Test different d_model values
-D_MODELS=(128)
+D_MODELS=(64 128 256)
 
-# PEMS03 specific settings
-PRED_LENS=(12 24 36 48)
-ENC_IN=358
+# Traffic specific settings
+PRED_LENS=(96 192 336 720)
+ENC_IN=862
 
-# GPU allocation[]
-GPU=3
+# GPU allocation
+GPU=1
 
 echo "=========================================="
 echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART"
@@ -40,7 +40,7 @@ echo ""
 
 # Create results summary file
 SUMMARY_FILE="$RESULTS_DIR/comparison_summary.txt"
-echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on PEMS03" > "$SUMMARY_FILE"
+echo "d_model Comparison: HtulTS vs SimMTM vs TimeDART on Traffic" > "$SUMMARY_FILE"
 echo "Timestamp: $TIMESTAMP" >> "$SUMMARY_FILE"
 echo "======================================================" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
@@ -50,6 +50,7 @@ echo "" >> "$SUMMARY_FILE"
 run_htults_pretrain() {
     local input_len=$1
     local d_model=$2
+    local d_ff=$((d_model * 2))
     for use_forgetting in 0 1; do
         local run_tag="fg${use_forgetting}"
         local log_file="$LOG_DIR/htults_pretrain_len${input_len}_dm${d_model}_${run_tag}.log"
@@ -59,30 +60,29 @@ run_htults_pretrain() {
 
         python -u run.py \
             --task_name pretrain \
-            --root_path ./datasets/PEMS/ \
-            --data_path PEMS03.npz \
-            --model_id PEMS03_len${input_len}_dm${d_model}_${run_tag} \
+            --root_path ./datasets/traffic/ \
+            --data_path traffic.csv \
+            --model_id Traffic_len${input_len}_dm${d_model}_${run_tag} \
             --model HtulTS \
-            --data PEMS03 \
+            --data Traffic \
             --features M \
             --input_len $input_len \
-            --seq_len $input_len \
-            --e_layers 2 \
+            --e_layers 3 \
             --d_layers 1 \
             --enc_in $ENC_IN \
             --dec_in $ENC_IN \
             --c_out $ENC_IN \
-            --n_heads 8 \
+            --n_heads 16 \
             --d_model $d_model \
-            --d_ff 512 \
-            --patch_len 16 \
+            --d_ff $d_ff \
+            --patch_len 8 \
             --stride 8 \
             --head_dropout 0.1 \
             --dropout 0.2 \
             --time_steps 1000 \
             --scheduler cosine \
-            --lr_decay 0.9 \
-            --learning_rate 0.0005 \
+            --lr_decay 0.95 \
+            --learning_rate 0.0001 \
             --batch_size 8 \
             --train_epochs 50 \
             --use_noise 0 \
@@ -93,7 +93,6 @@ run_htults_pretrain() {
             --tfc_warmup_steps 750 \
             --projection_dim 128 \
             --use_real_imag 1 \
-            --num_workers 0 \
             --gpu $GPU \
             2>&1 | tee "$log_file"
     done
@@ -106,7 +105,8 @@ run_htults_finetune() {
     local input_len=$1
     local pred_len=$2
     local d_model=$3
-    local label_len=$(( input_len < 48 ? input_len : 48 ))
+    local d_ff=$((d_model * 2))
+    local label_len=48
     for use_forgetting in 0 1; do
         local run_tag="fg${use_forgetting}"
         local log_file="$LOG_DIR/htults_finetune_len${input_len}_pred${pred_len}_dm${d_model}_${run_tag}.log"
@@ -117,24 +117,24 @@ run_htults_finetune() {
         python -u run.py \
             --task_name finetune \
             --is_training 1 \
-            --root_path ./datasets/PEMS/ \
-            --data_path PEMS03.npz \
-            --model_id PEMS03_len${input_len}_dm${d_model}_${run_tag} \
+            --root_path ./datasets/traffic/ \
+            --data_path traffic.csv \
+            --model_id Traffic_len${input_len}_dm${d_model}_${run_tag} \
             --model HtulTS \
-            --data PEMS03 \
+            --data Traffic \
             --features M \
             --input_len $input_len \
             --seq_len $input_len \
             --label_len $label_len \
             --pred_len $pred_len \
-            --e_layers 2 \
+            --e_layers 3 \
             --enc_in $ENC_IN \
             --dec_in $ENC_IN \
             --c_out $ENC_IN \
-            --n_heads 8 \
+            --n_heads 16 \
             --d_model $d_model \
-            --d_ff 512 \
-            --patch_len 16 \
+            --d_ff $d_ff \
+            --patch_len 8 \
             --stride 8 \
             --dropout 0.2 \
             --head_dropout 0.1 \
@@ -144,8 +144,8 @@ run_htults_finetune() {
             --time_steps 1000 \
             --scheduler cosine \
             --patience 3 \
-            --learning_rate 0.0005 \
-            --pct_start 0.3 \
+            --learning_rate 0.003 \
+            --pct_start 0.2 \
             --train_epochs 10 \
             --use_noise 0 \
             --use_forgetting $use_forgetting \
@@ -153,8 +153,6 @@ run_htults_finetune() {
             --forgetting_rate 0.1 \
             --projection_dim 128 \
             --use_real_imag 1 \
-            --load_checkpoints "" \
-            --num_workers 0 \
             --gpu $GPU \
             2>&1 | tee "$log_file"
     done
@@ -168,6 +166,7 @@ run_htults_finetune() {
 run_simmtm_pretrain() {
     local input_len=$1
     local d_model=$2
+    local d_ff=$((d_model * 2))
     local log_file="$LOG_DIR/simmtm_pretrain_len${input_len}_dm${d_model}.log"
 
     echo ">>> Running SimMTM PRETRAIN with input_len=$input_len, d_model=$d_model"
@@ -175,30 +174,30 @@ run_simmtm_pretrain() {
 
     python -u run.py \
         --task_name pretrain \
-        --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --root_path ./datasets/traffic/ \
+        --data_path traffic.csv \
+        --model_id Traffic_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data PEMS03 \
+        --data Traffic \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
-        --e_layers 2 \
+        --e_layers 3 \
         --d_layers 1 \
         --enc_in $ENC_IN \
         --dec_in $ENC_IN \
         --c_out $ENC_IN \
-        --n_heads 8 \
+        --n_heads 16 \
         --d_model $d_model \
-        --d_ff 512 \
-        --patch_len 16 \
+        --d_ff $d_ff \
+        --patch_len 8 \
         --stride 8 \
         --head_dropout 0.1 \
         --dropout 0.2 \
         --time_steps 1000 \
         --scheduler cosine \
-        --lr_decay 0.9 \
-        --learning_rate 0.0005 \
+        --lr_decay 0.95 \
+        --learning_rate 0.0001 \
         --batch_size 8 \
         --train_epochs 50 \
         --use_noise 0 \
@@ -218,7 +217,8 @@ run_simmtm_finetune() {
     local input_len=$1
     local pred_len=$2
     local d_model=$3
-    local label_len=$(( input_len < 48 ? input_len : 48 ))
+    local d_ff=$((d_model * 2))
+    local label_len=48
     local log_file="$LOG_DIR/simmtm_finetune_len${input_len}_pred${pred_len}_dm${d_model}.log"
 
     echo ">>> Running SimMTM FINETUNE with input_len=$input_len, pred_len=$pred_len, d_model=$d_model"
@@ -227,24 +227,24 @@ run_simmtm_finetune() {
     python -u run.py \
         --task_name finetune \
         --is_training 1 \
-        --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --root_path ./datasets/traffic/ \
+        --data_path traffic.csv \
+        --model_id Traffic_len${input_len}_dm${d_model} \
         --model SimMTM \
-        --data PEMS03 \
+        --data Traffic \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
         --label_len $label_len \
         --pred_len $pred_len \
-        --e_layers 2 \
+        --e_layers 3 \
         --enc_in $ENC_IN \
         --dec_in $ENC_IN \
         --c_out $ENC_IN \
-        --n_heads 8 \
+        --n_heads 16 \
         --d_model $d_model \
-        --d_ff 512 \
-        --patch_len 16 \
+        --d_ff $d_ff \
+        --patch_len 8 \
         --stride 8 \
         --dropout 0.2 \
         --head_dropout 0.1 \
@@ -254,8 +254,8 @@ run_simmtm_finetune() {
         --time_steps 1000 \
         --scheduler cosine \
         --patience 3 \
-        --learning_rate 0.0005 \
-        --pct_start 0.3 \
+        --learning_rate 0.003 \
+        --pct_start 0.2 \
         --train_epochs 10 \
         --use_noise 0 \
         --use_forgetting 0 \
@@ -275,6 +275,7 @@ run_simmtm_finetune() {
 run_timedart_pretrain() {
     local input_len=$1
     local d_model=$2
+    local d_ff=$((d_model * 2))
     local log_file="$LOG_DIR/timedart_pretrain_len${input_len}_dm${d_model}.log"
 
     echo ">>> Running TimeDART PRETRAIN with input_len=$input_len, d_model=$d_model"
@@ -282,29 +283,29 @@ run_timedart_pretrain() {
 
     python -u run.py \
         --task_name pretrain \
-        --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --root_path ./datasets/traffic/ \
+        --data_path traffic.csv \
+        --model_id Traffic_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data PEMS03 \
+        --data Traffic \
         --features M \
         --input_len $input_len \
-        --e_layers 2 \
+        --e_layers 3 \
         --d_layers 1 \
         --enc_in $ENC_IN \
         --dec_in $ENC_IN \
         --c_out $ENC_IN \
-        --n_heads 8 \
+        --n_heads 16 \
         --d_model $d_model \
-        --d_ff 512 \
-        --patch_len 16 \
+        --d_ff $d_ff \
+        --patch_len 8 \
         --stride 8 \
         --head_dropout 0.1 \
         --dropout 0.2 \
         --time_steps 1000 \
         --scheduler cosine \
-        --lr_decay 0.9 \
-        --learning_rate 0.0005 \
+        --lr_decay 0.95 \
+        --learning_rate 0.0001 \
         --batch_size 8 \
         --train_epochs 50 \
         --num_workers 0 \
@@ -319,7 +320,8 @@ run_timedart_finetune() {
     local input_len=$1
     local pred_len=$2
     local d_model=$3
-    local label_len=$(( input_len < 48 ? input_len : 48 ))
+    local d_ff=$((d_model * 2))
+    local label_len=48
     local log_file="$LOG_DIR/timedart_finetune_len${input_len}_pred${pred_len}_dm${d_model}.log"
 
     echo ">>> Running TimeDART FINETUNE with input_len=$input_len, pred_len=$pred_len, d_model=$d_model"
@@ -328,24 +330,24 @@ run_timedart_finetune() {
     python -u run.py \
         --task_name finetune \
         --is_training 1 \
-        --root_path ./datasets/PEMS/ \
-        --data_path PEMS03.npz \
-        --model_id PEMS03_len${input_len}_dm${d_model} \
+        --root_path ./datasets/traffic/ \
+        --data_path traffic.csv \
+        --model_id Traffic_len${input_len}_dm${d_model} \
         --model TimeDART \
-        --data PEMS03 \
+        --data Traffic \
         --features M \
         --input_len $input_len \
         --seq_len $input_len \
         --label_len $label_len \
         --pred_len $pred_len \
-        --e_layers 2 \
+        --e_layers 3 \
         --enc_in $ENC_IN \
         --dec_in $ENC_IN \
         --c_out $ENC_IN \
-        --n_heads 8 \
+        --n_heads 16 \
         --d_model $d_model \
-        --d_ff 512 \
-        --patch_len 16 \
+        --d_ff $d_ff \
+        --patch_len 8 \
         --stride 8 \
         --dropout 0.2 \
         --head_dropout 0.1 \
@@ -355,8 +357,8 @@ run_timedart_finetune() {
         --time_steps 1000 \
         --scheduler cosine \
         --patience 3 \
-        --learning_rate 0.0005 \
-        --pct_start 0.3 \
+        --learning_rate 0.003 \
+        --pct_start 0.2 \
         --train_epochs 10 \
         --load_checkpoints "" \
         --num_workers 0 \
