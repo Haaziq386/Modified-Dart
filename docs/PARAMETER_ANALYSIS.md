@@ -99,11 +99,11 @@ These are only used for naming experiment folders, not for model behavior.
 - **Can remove**: Safe to remove for HtulTS scripts
 - **Impact if removed**: None for HtulTS model
 
-#### ⚠️ `--d_model` (32) - **USED IN HtulTS**
-- **Used in**: Transformer-based models
-- **HtulTS usage**: **NONE** - HtulTS uses its own hidden_dim (512 by default)
-- **Can remove**: Safe to remove for HtulTS scripts
-- **Impact if removed**: Will impact Patching
+#### ✅ `--d_model` (32) - **USED IN HtulTS**
+- **Used in**: Transformer-based models and HtulTS
+- **HtulTS usage**: Passed directly as `hidden_dim=args.d_model` to `LightweightModel`, controlling the patch embedding projection dimension and all internal hidden representations
+- **Can remove**: **Do NOT remove** - `args.d_model` is read without a fallback default in `HtulTS.py`, so omitting this from the script causes an `AttributeError` at runtime
+- **Impact if removed**: HtulTS will raise `AttributeError: Namespace object has no attribute 'd_model'` and fail to initialize
 
 #### ⚠️ `--d_ff` (64) - **NOT USED IN HtulTS**
 - **Used in**: Transformer-based models (feed-forward dimension)
@@ -111,17 +111,17 @@ These are only used for naming experiment folders, not for model behavior.
 - **Can remove**: Safe to remove for HtulTS scripts
 - **Impact if removed**: None for HtulTS model
 
-#### ⚠️ `--patch_len` (2) - **NOT USED IN HtulTS**
-- **Used in**: PatchTST and similar models
-- **HtulTS usage**: **NONE** - HtulTS doesn't use patching
-- **Can remove**: Safe to remove for HtulTS scripts
-- **Impact if removed**: None for HtulTS model
+#### ✅ `--patch_len` (2) - **USED IN HtulTS**
+- **Used in**: PatchTST, HtulTS, and similar models
+- **HtulTS usage**: Read via `getattr(args, 'patch_len', 16)` and passed to `PatchEmbedding`, which defines the size of each patch window extracted from the input sequence
+- **Can remove**: **Do NOT remove** - HtulTS will fall back to default `patch_len=16`; removing it prevents explicit control over patch granularity
+- **Impact if removed**: HtulTS uses a hard-coded default of 16, which may not be optimal for your dataset
 
-#### ⚠️ `--stride` (2) - **NOT USED IN HtulTS**
-- **Used in**: PatchTST and similar models
-- **HtulTS usage**: **NONE**
-- **Can remove**: Safe to remove for HtulTS scripts
-- **Impact if removed**: None for HtulTS model
+#### ✅ `--stride` (2) - **USED IN HtulTS**
+- **Used in**: PatchTST, HtulTS, and similar models
+- **HtulTS usage**: Read via `getattr(args, 'stride', 8)` and passed to `PatchEmbedding` to control the step size between consecutive patches
+- **Can remove**: **Do NOT remove** - HtulTS will fall back to default `stride=8`; removing it prevents explicit control over patch overlap
+- **Impact if removed**: HtulTS uses a hard-coded default of 8, which may not be optimal for your dataset
 
 ---
 
