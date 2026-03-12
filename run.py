@@ -156,7 +156,7 @@ parser.add_argument(
     "--individual", type=int, default=0, help="individual head; True 1 False 0"
 )
 parser.add_argument("--pct_start", type=float, default=0.3, help="pct_start")
-parser.add_argument("--patch_len", type=int, default=16, help="path length")
+parser.add_argument("--patch_len", type=int, default=16, help="patch length")
 parser.add_argument("--stride", type=int, default=8, help="stride")
 
 # Replace the existing decomposition arguments with:
