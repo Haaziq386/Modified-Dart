@@ -17,9 +17,10 @@ warnings.filterwarnings('ignore')
 
 # UEA datasets
 class Dataset_Epilepsy(Dataset):
-    def __init__(self, root_path, file_list=None, limit_size=None, flag=None, **kwargs):
+    def __init__(self, root_path, file_list=None, limit_size=None, flag=None, seq_len=None, **kwargs):
         self.kwargs = kwargs
         self.root_path = root_path
+        self.seq_len = seq_len  # target length; None = use native length (206)
         self.feature_df, self.labels_df = self.load_all(root_path, file_list=file_list, flag=flag)
         
         # use all features
@@ -76,7 +77,14 @@ class Dataset_Epilepsy(Dataset):
         return datas, labels 
     
     def __getitem__(self, ind):
-        data_x = torch.from_numpy(self.feature_df[ind])
+        data_x = torch.from_numpy(self.feature_df[ind])  # [native_len, channels]
+        if self.seq_len is not None:
+            native_len = data_x.shape[0]
+            if self.seq_len <= native_len:
+                data_x = data_x[:self.seq_len]
+            else:
+                pad = torch.zeros(self.seq_len - native_len, data_x.shape[1])
+                data_x = torch.cat([data_x, pad], dim=0)
         data_y = torch.tensor(self.labels_df[ind], dtype=torch.long)
         x_mark = torch.zeros(data_x.shape)
         y_mark = torch.zeros(data_y.shape)
@@ -159,12 +167,13 @@ class Dataset_Physio(Dataset):
     def __init__(self, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
                  target='OT', scale=True, timeenc=0, freq='h',
-                 use_time_features=False
+                 use_time_features=False, seq_len=None
                  ):
         
         self.flag = flag
         self.root_path = root_path
         self.use_time_features = False
+        self.seq_len = seq_len  # target length; None = use native length
         
         self.__read_data__()
         
@@ -201,6 +210,15 @@ class Dataset_Physio(Dataset):
             # Current is [9,128], swap it
             x = x.transpose(0, 1)
 
+        # Truncate or zero-pad to target sequence length
+        if self.seq_len is not None:
+            native_len = x.shape[0]
+            if self.seq_len <= native_len:
+                x = x[:self.seq_len]
+            else:
+                pad = torch.zeros(self.seq_len - native_len, x.shape[1])
+                x = torch.cat([x, pad], dim=0)
+
         y = self.data_y[item]
         x_mark = torch.zeros(x.shape)
         y_mark = torch.zeros(y.shape)
@@ -212,9 +230,10 @@ class Dataset_PT_Format(Dataset):
     Loader for preprocessed .pt files (EMG, SleepEEG, etc.)
     Expects train.pt, val.pt, test.pt in root_path
     """
-    def __init__(self, root_path, flag='train', size=None, features='S', data_path=None, target='OT', scale=False, timeenc=0, freq='h', seasonal_patterns=None):
+    def __init__(self, root_path, flag='train', size=None, features='S', data_path=None, target='OT', scale=False, timeenc=0, freq='h', seasonal_patterns=None, seq_len=None, **kwargs):
         self.root_path = root_path
         self.flag = flag
+        self.seq_len = seq_len  # target length; None = use native length
         self.__read_data__()
 
     def __read_data__(self):
@@ -255,9 +274,17 @@ class Dataset_PT_Format(Dataset):
 
     def __getitem__(self, index):
         # Return format: seq_x, seq_y, seq_x_mark, seq_y_mark
-        seq_x = self.data_x[index]
+        seq_x = self.data_x[index]  # [length, channels]
         seq_y = self.data_y[index]
-        
+
+        if self.seq_len is not None:
+            native_len = seq_x.shape[0]
+            if self.seq_len <= native_len:
+                seq_x = seq_x[:self.seq_len]
+            else:
+                pad = torch.zeros(self.seq_len - native_len, seq_x.shape[1])
+                seq_x = torch.cat([seq_x, pad], dim=0)
+
         # Dummy marks as these datasets usually don't have timestamps
         seq_x_mark = torch.zeros((seq_x.shape[0], 1)) 
         seq_y_mark = torch.zeros((seq_x.shape[0], 1))
@@ -869,7 +896,7 @@ class UEAloader(Dataset):
             (Moreover, script argument overrides this attribute)
     """
 
-    def __init__(self, root_path, file_list=None, limit_size=None, flag=None):
+    def __init__(self, root_path, file_list=None, limit_size=None, flag=None, seq_len=None, **kwargs):
         self.root_path = root_path
         self.all_df, self.labels_df = self.load_all(root_path, file_list=file_list, flag=flag)
         self.all_IDs = self.all_df.index.unique()  # all sample IDs (integer indices 0 ... num_samples-1)
