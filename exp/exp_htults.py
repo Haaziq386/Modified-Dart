@@ -114,7 +114,7 @@ class Exp_HtulTS(Exp_Basic):
             # current learning rate
             print("Current learning rate: {:.7f}".format(model_scheduler.get_last_lr()[0]))
 
-            train_loss = self.pretrain_one_epoch(
+            train_loss, tfc_loss = self.pretrain_one_epoch(
                 train_loader, model_optim, model_scheduler
             )
             vali_loss = self.valid_one_epoch(vali_loader)
@@ -122,17 +122,19 @@ class Exp_HtulTS(Exp_Basic):
             # log and Loss
             end_time = time.time()
             print(
-                "Epoch: {}/{}, Time: {:.2f}, Train Loss: {:.4f}, Vali Loss: {:.4f}".format(
+                "Epoch: {}/{}, Time: {:.2f}, Train Loss: {:.4f}, TF-C Loss: {:.4f}, Vali Loss: {:.4f}".format(
                     epoch + 1,
                     self.args.train_epochs,
                     end_time - start_time,
                     train_loss,
+                    tfc_loss,
                     vali_loss,
                 )
             )
 
             loss_scalar_dict = {
                 "train_loss": train_loss,
+                "tfc_loss": tfc_loss,
                 "vali_loss": vali_loss,
             }
 
@@ -187,8 +189,9 @@ class Exp_HtulTS(Exp_Basic):
 
         model_scheduler.step()
         train_loss = np.mean(train_loss)
+        tfc_loss = np.mean(tfc_loss_list)
 
-        return train_loss
+        return train_loss, tfc_loss
 
     def valid_one_epoch(self, vali_loader):
         vali_loss = []
