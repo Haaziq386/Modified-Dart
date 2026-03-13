@@ -6,14 +6,14 @@ python -u run.py \
     --model HtulTS \
     --data ETTh2 \
     --features M \
-    --input_len 336 \
+    --input_len 96 \
     --e_layers 2 \
     --d_layers 1 \
     --enc_in 7 \
     --dec_in 7 \
     --c_out 7 \
     --n_heads 8 \
-    --d_model 8 \
+    --d_model 64 \
     --d_ff 32 \
     --patch_len 2 \
     --stride 2 \
@@ -22,7 +22,13 @@ python -u run.py \
     --time_steps 1000 \
     --scheduler cosine \
     --lr_decay 0.95 \
-    --learning_rate 0.0005 \
+    --learning_rate 0.0001 \
     --batch_size 16 \
     --train_epochs 50 \
+    --use_noise 0 \
+    --use_forgetting 0 \
+    --tfc_weight 0.05 \
+    --tfc_warmup_steps 750 \
+    --projection_dim 128 \
+    --use_real_imag 1 \
     --gpu 0

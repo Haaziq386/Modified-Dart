@@ -16,7 +16,7 @@ for pred_len in 96 192 336 720; do
         --dec_in 7 \
         --c_out 7 \
         --n_heads 8 \
-        --d_model 8 \
+        --d_model 64 \
         --d_ff 32 \
         --patch_len 2 \
         --stride 2 \
@@ -29,6 +29,10 @@ for pred_len in 96 192 336 720; do
         --time_steps 1000 \
         --scheduler cosine \
         --patience 3 \
+        --use_noise 0 \
         --learning_rate 0.0001 \
+        --use_forgetting 0 \
+        --use_real_imag 1 \
+        --projection_dim 128 \
         --pct_start 0.3
 done

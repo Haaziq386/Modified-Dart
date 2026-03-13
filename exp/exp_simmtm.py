@@ -32,7 +32,7 @@ class Exp_SimMTM(Exp_Basic):
 
         #     model = transfer_weights(self.args.load_checkpoints, model, device=self.device)
 
-        if torch.cuda.device_count() > 1:
+        if self.args.use_multi_gpu and torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!", self.args.device_ids)
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
 

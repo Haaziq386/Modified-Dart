@@ -156,8 +156,8 @@ parser.add_argument(
     "--individual", type=int, default=0, help="individual head; True 1 False 0"
 )
 parser.add_argument("--pct_start", type=float, default=0.3, help="pct_start")
-parser.add_argument("--patch_len", type=int, default=12, help="path length")
-parser.add_argument("--stride", type=int, default=12, help="stride")
+parser.add_argument("--patch_len", type=int, default=16, help="patch length")
+parser.add_argument("--stride", type=int, default=8, help="stride")
 
 # Replace the existing decomposition arguments with:
 parser.add_argument('--use_decomposition', type=int, default=0, 
@@ -220,6 +220,16 @@ parser.add_argument('--forgetting_type', type=str, default='activation',
                    help='type of forgetting mechanism, options:[activation, weight, adaptive]')
 parser.add_argument('--forgetting_rate', type=float, default=0.1, 
                    help='forgetting strength (0.0=no forgetting, 1.0=complete forgetting)')
+
+# TF-C (Time-Frequency Consistency) parameters
+parser.add_argument('--tfc_weight', type=float, default=0.05, 
+                   help='weight for TF-C contrastive loss (default: 0.05)')
+parser.add_argument('--tfc_warmup_steps', type=int, default=0, 
+                   help='number of steps to warm up TF-C weight (default: 0 = no warmup)')
+parser.add_argument('--use_real_imag', type=int, default=0, 
+                   help='use real/imag FFT features instead of amp/phase (0=False, 1=True)')
+parser.add_argument('--projection_dim', type=int, default=128, 
+                   help='dimension of contrastive projection heads (default: 128)')
 
 ## SimMTM 
 # Pre-train

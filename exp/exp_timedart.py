@@ -45,7 +45,7 @@ class Exp_TimeDART(Exp_Basic):
                 self.args.load_checkpoints, model, device=transfer_device
             )
 
-        if torch.cuda.device_count() > 1:
+        if self.args.use_multi_gpu and torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!", self.args.device_ids)
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
 

@@ -29,6 +29,4 @@ python -u run.py \
     --noise_level 0.15 \
     --gpu 2 \
     --use_norm 0 \
-    --use_forgetting 1 \
-    --forgetting_type activation \
-    --forgetting_rate 0.1
+    --use_forgetting 0 

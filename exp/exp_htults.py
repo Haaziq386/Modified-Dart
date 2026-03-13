@@ -42,9 +42,24 @@ class Exp_HtulTS(Exp_Basic):
 
             # Load to CPU first to handle checkpoints saved on different GPU devices
             state_dict = torch.load(self.args.load_checkpoints, map_location='cpu')
-            model.load_state_dict(state_dict, strict=False)  # strict=False allows missing keys (e.g., head)
+            if isinstance(state_dict, dict) and "model_state_dict" in state_dict:
+                state_dict = state_dict["model_state_dict"]
 
-        if torch.cuda.device_count() > 1:
+            model_state = model.state_dict()
+            filtered_state = OrderedDict()
+            skipped = []
+            for k, v in state_dict.items():
+                if k in model_state and model_state[k].shape == v.shape:
+                    filtered_state[k] = v
+                else:
+                    skipped.append(k)
+
+            if skipped:
+                print(f"Skipped {len(skipped)} keys due to shape/name mismatch: {skipped[:10]}")
+
+            model.load_state_dict(filtered_state, strict=False)  # strict=False allows missing keys (e.g., head)
+
+        if self.args.use_multi_gpu and torch.cuda.device_count() > 1:
             print("Let's use", torch.cuda.device_count(), "GPUs!", self.args.device_ids)
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
 
@@ -99,7 +114,7 @@ class Exp_HtulTS(Exp_Basic):
             # current learning rate
             print("Current learning rate: {:.7f}".format(model_scheduler.get_last_lr()[0]))
 
-            train_loss = self.pretrain_one_epoch(
+            train_loss, tfc_loss = self.pretrain_one_epoch(
                 train_loader, model_optim, model_scheduler
             )
             vali_loss = self.valid_one_epoch(vali_loader)
@@ -107,17 +122,19 @@ class Exp_HtulTS(Exp_Basic):
             # log and Loss
             end_time = time.time()
             print(
-                "Epoch: {}/{}, Time: {:.2f}, Train Loss: {:.4f}, Vali Loss: {:.4f}".format(
+                "Epoch: {}/{}, Time: {:.2f}, Train Loss: {:.4f}, TF-C Loss: {:.4f}, Vali Loss: {:.4f}".format(
                     epoch + 1,
                     self.args.train_epochs,
                     end_time - start_time,
                     train_loss,
+                    tfc_loss,
                     vali_loss,
                 )
             )
 
             loss_scalar_dict = {
                 "train_loss": train_loss,
+                "tfc_loss": tfc_loss,
                 "vali_loss": vali_loss,
             }
 
@@ -143,6 +160,7 @@ class Exp_HtulTS(Exp_Basic):
 
     def pretrain_one_epoch(self, train_loader, model_optim, model_scheduler):
         train_loss = []
+        tfc_loss_list = []
         model_criterion = self._select_criterion()
 
         self.model.train()
@@ -154,17 +172,26 @@ class Exp_HtulTS(Exp_Basic):
             batch_x = batch_x.float().to(self.device)
             batch_y = batch_y.float().to(self.device)
 
-            pred_x = self.model(batch_x)
-            diff_loss = model_criterion(pred_x, batch_x)
-            diff_loss.backward()
+            # Model returns (reconstruction, loss_tfc) during pretrain
+            pred_x, loss_tfc = self.model(batch_x)
+            
+            # Reconstruction loss
+            recon_loss = model_criterion(pred_x, batch_x)
+            
+            # Total loss = reconstruction + TF-C contrastive loss
+            # Note: loss_tfc is already weighted by tfc_weight inside the model
+            total_loss = recon_loss + loss_tfc
+            total_loss.backward()
 
             model_optim.step()
-            train_loss.append(diff_loss.item())
+            train_loss.append(total_loss.item())
+            tfc_loss_list.append(loss_tfc.item())
 
         model_scheduler.step()
         train_loss = np.mean(train_loss)
+        tfc_loss = np.mean(tfc_loss_list)
 
-        return train_loss
+        return train_loss, tfc_loss
 
     def valid_one_epoch(self, vali_loader):
         vali_loss = []
@@ -178,9 +205,11 @@ class Exp_HtulTS(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
-                pred_x = self.model(batch_x)
-                diff_loss = model_criterion(pred_x, batch_x)
-                vali_loss.append(diff_loss.item())
+                # Model returns (reconstruction, loss_tfc) during pretrain
+                pred_x, loss_tfc = self.model(batch_x)
+                recon_loss = model_criterion(pred_x, batch_x)
+                total_loss = recon_loss + loss_tfc
+                vali_loss.append(total_loss.item())
 
         vali_loss = np.mean(vali_loss)
 
