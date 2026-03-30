@@ -4,6 +4,7 @@ from exp.exp_timedart import Exp_TimeDART
 from exp.exp_timedart_v2 import Exp_TimeDART_v2
 from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
+from exp.exp_patchtst import Exp_PatchTST
 import random
 import numpy as np
 import os
@@ -158,6 +159,33 @@ parser.add_argument(
 parser.add_argument("--pct_start", type=float, default=0.3, help="pct_start")
 parser.add_argument("--patch_len", type=int, default=16, help="patch length")
 parser.add_argument("--stride", type=int, default=8, help="stride")
+parser.add_argument(
+    "--padding_patch",
+    type=str,
+    default="end",
+    help="None: None; end: padding on the end",
+)
+parser.add_argument(
+    "--revin", type=int, default=1, help="RevIN; True 1 False 0"
+)
+parser.add_argument(
+    "--affine", type=int, default=0, help="RevIN-affine; True 1 False 0"
+)
+parser.add_argument(
+    "--subtract_last", type=int, default=0, help="0: subtract mean; 1: subtract last"
+)
+parser.add_argument(
+    "--decomposition", type=int, default=0, help="decomposition; True 1 False 0"
+)
+parser.add_argument(
+    "--kernel_size", type=int, default=25, help="decomposition-kernel"
+)
+parser.add_argument(
+    "--embed_type",
+    type=int,
+    default=0,
+    help="0: default 1: value embedding + temporal embedding + positional embedding 2: value embedding + temporal embedding 3: value embedding + positional embedding 4: value embedding",
+)
 
 # Replace the existing decomposition arguments with:
 parser.add_argument('--use_decomposition', type=int, default=0, 
@@ -257,11 +285,73 @@ Exp_map = {
     "HtulTS": Exp_HtulTS,
     "TimeDART_v2": Exp_TimeDART_v2,
     "SimMTM": Exp_SimMTM,
+    "PatchTST": Exp_PatchTST,
 }
 
 Exp = Exp_map[args.model]
 
-if args.task_name == "pretrain":
+if args.model == "PatchTST":
+    if args.is_training:
+        for ii in range(args.itr):
+            setting = "{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}".format(
+                args.model_id,
+                args.model,
+                args.data,
+                args.features,
+                args.seq_len,
+                args.label_len,
+                args.pred_len,
+                args.d_model,
+                args.n_heads,
+                args.e_layers,
+                args.d_layers,
+                args.d_ff,
+                args.factor,
+                args.embed,
+                args.distil,
+                args.des,
+                ii,
+            )
+
+            exp = Exp(args)
+            print(">>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
+            exp.train(setting)
+
+            print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+            exp.test(setting)
+
+            if args.do_predict:
+                print(">>>>>>>predicting : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+                exp.predict(setting, True)
+
+            torch.cuda.empty_cache()
+    else:
+        ii = 0
+        setting = "{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}".format(
+            args.model_id,
+            args.model,
+            args.data,
+            args.features,
+            args.seq_len,
+            args.label_len,
+            args.pred_len,
+            args.d_model,
+            args.n_heads,
+            args.e_layers,
+            args.d_layers,
+            args.d_ff,
+            args.factor,
+            args.embed,
+            args.distil,
+            args.des,
+            ii,
+        )
+        exp = Exp(args)
+        print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+        exp.test(setting, test=1)
+        torch.cuda.empty_cache()
+
+elif args.task_name == "pretrain":
     for ii in range(args.itr):
         # setting record of experiments
         setting = "{}_{}_{}_{}_il{}_ll{}_pl{}_dm{}_df{}_nh{}_el{}_dl{}_fc{}_dp{}_hdp{}_ep{}_bs{}_lr{}_ts{}_sc{}_decomp{}_per{}".format(
