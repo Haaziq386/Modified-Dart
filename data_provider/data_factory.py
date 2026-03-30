@@ -78,6 +78,7 @@ def data_provider(args, flag):
             root_path=args.root_path,
             data_path=args.data_path,
             flag=flag,
+            seq_len=args.input_len,
         )
         print(flag, len(data_set))
         data_loader = DataLoader(

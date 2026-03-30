@@ -448,11 +448,12 @@ class LightweightModel(nn.Module):
             # Transpose for Conv1d: [B, C, Hidden] -> [B, Hidden, C]
             cnn_input = h_fused_3d.transpose(1, 2)
             
-            # Forward through CNN: [B, Hidden, C]
+            # Avoid downsampling along the feature axis. Some classification datasets
+            # only have 2-3 channels, so repeated pooling would collapse the length to 0.
             x = F.relu(self.conv1(cnn_input))
-            x = self.pool(x); x = self.dropout(x)
+            x = self.dropout(x)
             x = F.relu(self.conv2(x))
-            x = self.pool(x); x = self.dropout(x)
+            x = self.dropout(x)
             x = F.relu(self.conv3(x))
             x = self.global_pool(x).squeeze(-1)  # [B, 256]
             x = self.classifier(x)
