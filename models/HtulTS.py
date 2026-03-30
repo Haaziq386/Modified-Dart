@@ -4,16 +4,83 @@ import torch.nn.functional as F
 import math
 
 
+class AdaptiveFrequencyWarping(nn.Module):
+    """
+    Lightweight learnable monotonic frequency warping.
+
+    Input/Output shapes:
+    - [N, F, D] -> [N, F, D]
+    - [N, F] -> [N, F]
+    """
+    def __init__(self, num_bins, eps=1e-6):
+        super(AdaptiveFrequencyWarping, self).__init__()
+        if num_bins < 2:
+            raise ValueError("num_bins must be >= 2")
+
+        self.num_bins = int(num_bins)
+        self.eps = float(eps)
+
+        init_val = 1.0 / (self.num_bins - 1)
+        inv_sp = math.log(math.exp(init_val) - 1.0)
+        self.raw_increments = nn.Parameter(
+            torch.full((self.num_bins - 1,), inv_sp, dtype=torch.float)
+        )
+
+    def _compute_grid(self):
+        increments = F.softplus(self.raw_increments)
+        zero = increments.new_zeros(1)
+        cum = torch.cat([zero, torch.cumsum(increments, dim=0)], dim=0)
+        total = cum[-1].clamp(min=self.eps)
+        grid = (cum / total).clamp(0.0, 1.0)
+        return grid
+
+    def forward(self, freq_features):
+        orig_ndim = freq_features.dim()
+        if orig_ndim == 2:
+            freq = freq_features.unsqueeze(-1)
+        elif orig_ndim == 3:
+            freq = freq_features
+        else:
+            raise ValueError("freq_features must be 2D or 3D tensor")
+
+        _, f_bins, _ = freq.shape
+        if f_bins != self.num_bins:
+            raise ValueError(f"Expected {self.num_bins} frequency bins, got {f_bins}")
+
+        grid = self._compute_grid()
+        scaled = (grid * (f_bins - 1)).clamp(0.0, f_bins - 1.0)
+
+        left_idx = torch.floor(scaled).long()
+        right_idx = (left_idx + 1).clamp(max=f_bins - 1)
+        weight = (scaled - left_idx.float()).unsqueeze(0).unsqueeze(-1)
+
+        left_vals = torch.index_select(freq, dim=1, index=left_idx)
+        right_vals = torch.index_select(freq, dim=1, index=right_idx)
+        warped = (1.0 - weight) * left_vals + weight * right_vals
+
+        if orig_ndim == 2:
+            return warped.squeeze(-1)
+        return warped
+
+
 class FrequencyEncoder(nn.Module):
     """
     Frequency-domain encoder using FFT with improved stability.
     Takes time-domain input and produces frequency embeddings.
     """
-    def __init__(self, input_len, hidden_dim=512, dropout=0.2, use_real_imag=False):
+    def __init__(
+        self,
+        input_len,
+        hidden_dim=512,
+        dropout=0.2,
+        use_real_imag=False,
+        use_warping=False,
+    ):
         super(FrequencyEncoder, self).__init__()
         self.input_len = input_len
         self.hidden_dim = hidden_dim
         self.use_real_imag = use_real_imag
+        self.use_warping = use_warping
         
         # FFT output size: L//2 + 1 complex values
         self.num_freq_bins = input_len // 2 + 1
@@ -32,8 +99,11 @@ class FrequencyEncoder(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout)
         )
+
+        if self.use_warping:
+            self.warper = AdaptiveFrequencyWarping(self.num_freq_bins)
     
-    def forward(self, x):
+    def forward(self, x, return_bins: bool = False):
         # x: [N, L] time-domain signal
         x_windowed = x * self.hann_window
         spectrum = torch.fft.rfft(x_windowed, dim=-1)
@@ -41,20 +111,28 @@ class FrequencyEncoder(nn.Module):
         if self.use_real_imag:
             real_part = spectrum.real
             imag_part = spectrum.imag
-            freq_features = torch.cat([real_part, imag_part], dim=-1)
+            freq_features = torch.stack([real_part, imag_part], dim=-1)
         else:
             amplitude = torch.log1p(torch.abs(spectrum))
             phase = torch.angle(spectrum)
             sin_phase = torch.sin(phase)
             cos_phase = torch.cos(phase)
-            freq_features = torch.cat([amplitude, sin_phase, cos_phase], dim=-1)
+            freq_features = torch.stack([amplitude, sin_phase, cos_phase], dim=-1)
+
+        if self.use_warping:
+            freq_features = self.warper(freq_features)
         
-        # Per-sample normalization
-        mean = freq_features.mean(dim=-1, keepdim=True)
-        std = freq_features.std(dim=-1, keepdim=True).clamp(min=1e-6)
+        # Per-sample normalization across frequency bins and channels
+        mean = freq_features.mean(dim=(1, 2), keepdim=True)
+        std = freq_features.std(dim=(1, 2), keepdim=True).clamp(min=1e-6)
         freq_features = (freq_features - mean) / std
+
+        freq_flat = freq_features.reshape(freq_features.size(0), -1)
+        freq_flat = torch.nan_to_num(freq_flat, nan=0.0, posinf=1e6, neginf=-1e6)
         
-        h_freq = self.freq_projection(freq_features)
+        h_freq = self.freq_projection(freq_flat)
+        if return_bins:
+            return h_freq, freq_features
         return h_freq
 
 
@@ -141,6 +219,174 @@ class TFC_Loss(nn.Module):
             return torch.tensor(0.0, device=device, requires_grad=True)
         
         return loss
+
+
+class CPCTFLoss(nn.Module):
+    """
+    Cross-modal predictive coding between time and frequency branches.
+    """
+
+    def __init__(
+        self,
+        freq_mask_ratio=0.2,
+        time_mask_ratio=0.2,
+        lambda_cpc=0.1,
+        use_learned_mask=True,
+        loss_type="l2",
+        pos_emb_dim=64,
+        hidden_dim=256,
+        eps=1e-6,
+    ):
+        super(CPCTFLoss, self).__init__()
+        self.freq_mask_ratio = float(freq_mask_ratio)
+        self.time_mask_ratio = float(time_mask_ratio)
+        self.lambda_cpc = float(lambda_cpc)
+        self.use_learned_mask = bool(use_learned_mask)
+        self.loss_type = loss_type
+        self.pos_emb_dim = int(pos_emb_dim)
+        self.hidden_dim = int(hidden_dim)
+        self.eps = float(eps)
+
+        self._built = False
+        self.freq_predictor = None
+        self.time_predictor = None
+        self.freq_pos_mlp = None
+        self.time_pos_mlp = None
+        self.freq_mask_token = None
+        self.time_mask_token = None
+
+    def _build(self, z_time_dim, z_freq_dim, feat_dim_freq, feat_dim_time):
+        self.freq_pos_mlp = nn.Sequential(
+            nn.Linear(1, self.pos_emb_dim),
+            nn.ReLU(),
+            nn.Linear(self.pos_emb_dim, self.pos_emb_dim),
+        )
+        self.time_pos_mlp = nn.Sequential(
+            nn.Linear(1, self.pos_emb_dim),
+            nn.ReLU(),
+            nn.Linear(self.pos_emb_dim, self.pos_emb_dim),
+        )
+
+        in_dim_f = z_time_dim + self.pos_emb_dim
+        hid_f = min(self.hidden_dim, max(in_dim_f, 64))
+        self.freq_predictor = nn.Sequential(
+            nn.Linear(in_dim_f, hid_f),
+            nn.ReLU(),
+            nn.Linear(hid_f, feat_dim_freq),
+        )
+
+        in_dim_t = z_freq_dim + self.pos_emb_dim
+        hid_t = min(self.hidden_dim, max(in_dim_t, 64))
+        self.time_predictor = nn.Sequential(
+            nn.Linear(in_dim_t, hid_t),
+            nn.ReLU(),
+            nn.Linear(hid_t, feat_dim_time),
+        )
+
+        if self.use_learned_mask:
+            self.freq_mask_token = nn.Parameter(torch.zeros(feat_dim_freq))
+            self.time_mask_token = nn.Parameter(torch.zeros(feat_dim_time))
+        else:
+            self.register_buffer("freq_mask_token", torch.zeros(feat_dim_freq))
+            self.register_buffer("time_mask_token", torch.zeros(feat_dim_time))
+
+        self._built = True
+
+    def _sample_band_mask(self, bsz, num_bins, device):
+        mask = torch.zeros(bsz, num_bins, dtype=torch.bool, device=device)
+        mask_len = max(1, int(round(self.freq_mask_ratio * num_bins)))
+        for b in range(bsz):
+            if mask_len >= num_bins:
+                start = 0
+            else:
+                start = torch.randint(0, num_bins - mask_len + 1, (1,), device=device).item()
+            mask[b, start:start + mask_len] = True
+        return mask
+
+    def _sample_patch_mask(self, bsz, num_patches, device):
+        mask = torch.zeros(bsz, num_patches, dtype=torch.bool, device=device)
+        mask_count = max(1, int(round(self.time_mask_ratio * num_patches)))
+        for b in range(bsz):
+            if mask_count >= num_patches:
+                idx = torch.arange(num_patches, device=device)
+            else:
+                idx = torch.randperm(num_patches, device=device)[:mask_count]
+            mask[b, idx] = True
+        return mask
+
+    def forward(self, z_time, z_freq, h_time_patches, h_freq_bins, tfc_loss=None):
+        if h_time_patches.dim() != 3 or h_freq_bins.dim() != 3:
+            raise ValueError("h_time_patches must be [B, N, D] and h_freq_bins [B, F, D]")
+
+        bsz = z_time.size(0)
+        device = z_time.device
+        num_patches = h_time_patches.size(1)
+        num_bins = h_freq_bins.size(1)
+        feat_dim_time = h_time_patches.size(2)
+        feat_dim_freq = h_freq_bins.size(2)
+
+        if not self._built:
+            self._build(
+                z_time_dim=z_time.size(1),
+                z_freq_dim=z_freq.size(1),
+                feat_dim_freq=feat_dim_freq,
+                feat_dim_time=feat_dim_time,
+            )
+            self.to(device)
+
+        mask_freq = self._sample_band_mask(bsz, num_bins, device=device)
+        mask_time = self._sample_patch_mask(bsz, num_patches, device=device)
+
+        pos_f = torch.linspace(0.0, 1.0, steps=num_bins, device=device).view(1, num_bins, 1)
+        pos_f_emb = self.freq_pos_mlp(pos_f).expand(bsz, -1, -1)
+        zt = z_time.unsqueeze(1).expand(-1, num_bins, -1)
+        pred_f = self.freq_predictor(torch.cat([zt, pos_f_emb], dim=-1).reshape(bsz * num_bins, -1))
+        pred_f = pred_f.reshape(bsz, num_bins, feat_dim_freq)
+
+        pos_t = torch.linspace(0.0, 1.0, steps=num_patches, device=device).view(1, num_patches, 1)
+        pos_t_emb = self.time_pos_mlp(pos_t).expand(bsz, -1, -1)
+        zf = z_freq.unsqueeze(1).expand(-1, num_patches, -1)
+        pred_t = self.time_predictor(torch.cat([zf, pos_t_emb], dim=-1).reshape(bsz * num_patches, -1))
+        pred_t = pred_t.reshape(bsz, num_patches, feat_dim_time)
+
+        loss_time_to_freq = torch.tensor(0.0, device=device)
+        loss_freq_to_time = torch.tensor(0.0, device=device)
+
+        total_masked_freq = int(mask_freq.sum().item())
+        if total_masked_freq > 0:
+            m = mask_freq.unsqueeze(-1).expand(-1, -1, feat_dim_freq)
+            target = h_freq_bins[m].reshape(-1, feat_dim_freq)
+            pred = pred_f[m].reshape(-1, feat_dim_freq)
+            if self.loss_type == "l2":
+                loss_val = F.mse_loss(pred, target, reduction="sum")
+            else:
+                loss_val = F.smooth_l1_loss(pred, target, reduction="sum")
+            loss_time_to_freq = loss_val / (max(1, pred.numel()) + self.eps)
+
+        total_masked_time = int(mask_time.sum().item())
+        if total_masked_time > 0:
+            m_t = mask_time.unsqueeze(-1).expand(-1, -1, feat_dim_time)
+            target_t = h_time_patches[m_t].reshape(-1, feat_dim_time)
+            pred_t_masked = pred_t[m_t].reshape(-1, feat_dim_time)
+            if self.loss_type == "l2":
+                loss_val = F.mse_loss(pred_t_masked, target_t, reduction="sum")
+            else:
+                loss_val = F.smooth_l1_loss(pred_t_masked, target_t, reduction="sum")
+            loss_freq_to_time = loss_val / (max(1, pred_t_masked.numel()) + self.eps)
+
+        loss_time_to_freq = torch.nan_to_num(loss_time_to_freq, nan=0.0, posinf=1e6, neginf=-1e6)
+        loss_freq_to_time = torch.nan_to_num(loss_freq_to_time, nan=0.0, posinf=1e6, neginf=-1e6)
+
+        tfc_loss_val = tfc_loss if tfc_loss is not None else torch.tensor(0.0, device=device)
+        total = tfc_loss_val + self.lambda_cpc * (loss_time_to_freq + loss_freq_to_time)
+        total = torch.nan_to_num(total, nan=0.0, posinf=1e6, neginf=-1e6)
+
+        return {
+            "loss_tfc": tfc_loss_val,
+            "loss_time_to_freq": loss_time_to_freq,
+            "loss_freq_to_time": loss_freq_to_time,
+            "loss_total": total,
+        }
 
 
 class ProjectionHead(nn.Module):
@@ -264,7 +510,8 @@ class LightweightModel(nn.Module):
                  num_classes=2, input_len=336, use_noise=False, 
                  use_forgetting=False, forgetting_type="activation", forgetting_rate=0.1,
                  tfc_weight=0.05, tfc_warmup_steps=0, use_real_imag=False,
-                 projection_dim=128, patch_len=16, stride=8, hidden_dim=512):
+                 use_warping=False, projection_dim=128, patch_len=16, stride=8,
+                 hidden_dim=512, use_cpc=False, cpc_kwargs=None):
         super(LightweightModel, self).__init__()
         self.task_name = task_name
         self.pred_len = pred_len
@@ -272,6 +519,7 @@ class LightweightModel(nn.Module):
         self.input_len = input_len
         self.use_noise = use_noise
         self.use_forgetting = use_forgetting
+        self.use_warping = use_warping
         self.hidden_dim = hidden_dim
         
         # Patch Config
@@ -312,7 +560,8 @@ class LightweightModel(nn.Module):
             input_len=input_len,
             hidden_dim=self.hidden_dim,
             dropout=0.2,
-            use_real_imag=use_real_imag
+            use_real_imag=use_real_imag,
+            use_warping=self.use_warping,
         )
         
         # Projection heads for TF-C contrastive loss
@@ -321,6 +570,14 @@ class LightweightModel(nn.Module):
         
         self.tfc_loss_fn = TFC_Loss(temperature=0.2)
         self.fusion = LearnableFusion(self.hidden_dim)
+
+        self.use_cpc = use_cpc
+        if self.use_cpc:
+            cpc_kwargs = cpc_kwargs or {}
+            self.cpctf_loss_fn = CPCTFLoss(**cpc_kwargs)
+        else:
+            self.cpctf_loss_fn = None
+        self.last_loss_dict = None
 
         # Forgetting
         if self.use_forgetting:
@@ -372,14 +629,14 @@ class LightweightModel(nn.Module):
         x_masked = x * (~mask) # Zero out masked values
         return x_masked, mask
 
-    def forward(self, x, noise_level=0.1):
+    def forward(self, x, add_noise_flag=False, noise_level=0.1):
         batch_size, seq_len, num_features = x.size()
         
         # 1. INPUT AUGMENTATION (Masking vs Noise)
         # ---------------------------------------------------
         if self.task_name == "pretrain":
             # Pretraining augmentation: noise or masking
-            if self.use_noise:
+            if self.use_noise and add_noise_flag:
                 x_input, _ = self.add_noise(x, noise_level=noise_level)
             else:
                 x_input, _ = self.random_masking(x, mask_ratio=0.4)
@@ -405,7 +662,7 @@ class LightweightModel(nn.Module):
         h_time = self.patch_mixer(x_patches_flat)
         
         # B: Frequency Path (Global) -> [B*C, Hidden]
-        h_freq = self.freq_backbone(x_flat)
+        h_freq, h_freq_bins = self.freq_backbone(x_flat, return_bins=True)
         
         # 3. FUSION & FORGETTING
         # ---------------------------------------------------
@@ -426,12 +683,20 @@ class LightweightModel(nn.Module):
             
             if self.training:
                 self.increment_step()
+
+            if self.use_cpc and self.cpctf_loss_fn is not None:
+                cpc_res = self.cpctf_loss_fn(z_time, z_freq, x_patches, h_freq_bins, tfc_loss=loss_tfc)
+                total_aux_loss = cpc_res.get("loss_total", loss_tfc)
+                self.last_loss_dict = cpc_res
+            else:
+                total_aux_loss = loss_tfc
+                self.last_loss_dict = {"loss_tfc": loss_tfc}
             
             reconstruction = self.decoder(h_fused)
             # Reshape: [B*C, L] -> [B, L, C]
             reconstruction = reconstruction.view(batch_size, num_features, seq_len).permute(0, 2, 1)
             
-            return reconstruction, loss_tfc
+            return reconstruction, total_aux_loss
 
         # FINETUNE (Forecasting)
         elif self.task_name == "finetune" and self.pred_len is not None:
@@ -483,7 +748,20 @@ class Model(nn.Module):
         tfc_weight = getattr(args, 'tfc_weight', 0.05)
         tfc_warmup_steps = getattr(args, 'tfc_warmup_steps', 0)
         use_real_imag = getattr(args, 'use_real_imag', False)
+        use_warping = getattr(args, 'use_warping', False)
         projection_dim = getattr(args, 'projection_dim', 128)
+
+        # CPC-TF params
+        use_cpc = getattr(args, 'use_cpc', False)
+        cpc_kwargs = {
+            'freq_mask_ratio': getattr(args, 'cpc_freq_mask_ratio', 0.2),
+            'time_mask_ratio': getattr(args, 'cpc_time_mask_ratio', 0.2),
+            'lambda_cpc': getattr(args, 'cpc_lambda', 0.1),
+            'use_learned_mask': getattr(args, 'cpc_use_learned_mask', True),
+            'loss_type': getattr(args, 'cpc_loss_type', 'l2'),
+            'pos_emb_dim': getattr(args, 'cpc_pos_emb_dim', 64),
+            'hidden_dim': getattr(args, 'cpc_hidden_dim', 256),
+        }
         
         # Patch params (Standard for ETTh1: P=16, S=8)
         patch_len = getattr(args, 'patch_len', 16)
@@ -503,10 +781,13 @@ class Model(nn.Module):
             tfc_weight=tfc_weight,
             tfc_warmup_steps=tfc_warmup_steps,
             use_real_imag=use_real_imag,
+            use_warping=use_warping,
             projection_dim=projection_dim,
             patch_len=patch_len,
             stride=stride,
-            hidden_dim=args.d_model
+            hidden_dim=args.d_model,
+            use_cpc=use_cpc,
+            cpc_kwargs=cpc_kwargs,
         )
 
     def pretrain(self, x):
@@ -517,7 +798,7 @@ class Model(nn.Module):
             stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
             x = x / stdevs
 
-        predict_x, loss_tfc = self.model(x, noise_level=self.noise_level)
+        predict_x, loss_tfc = self.model(x, add_noise_flag=True, noise_level=self.noise_level)
 
         if self.use_norm:
             predict_x = predict_x * stdevs[:, 0, :].unsqueeze(1).repeat(1, self.input_len, 1)
@@ -533,7 +814,7 @@ class Model(nn.Module):
             stdevs = torch.sqrt(torch.var(x, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()
             x = x / stdevs
 
-        prediction = self.model(x)
+        prediction = self.model(x, add_noise_flag=False)
 
         if self.use_norm:
             prediction = prediction * stdevs[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1)
@@ -564,9 +845,21 @@ class ClsModel(nn.Module):
         tfc_weight = getattr(args, 'tfc_weight', 0.05)
         tfc_warmup_steps = getattr(args, 'tfc_warmup_steps', 0)
         use_real_imag = getattr(args, 'use_real_imag', False)
+        use_warping = getattr(args, 'use_warping', False)
         projection_dim = getattr(args, 'projection_dim', 128)
         patch_len = getattr(args, 'patch_len', 16)
         stride = getattr(args, 'stride', 8)
+
+        use_cpc = getattr(args, 'use_cpc', False)
+        cpc_kwargs = {
+            'freq_mask_ratio': getattr(args, 'cpc_freq_mask_ratio', 0.2),
+            'time_mask_ratio': getattr(args, 'cpc_time_mask_ratio', 0.2),
+            'lambda_cpc': getattr(args, 'cpc_lambda', 0.1),
+            'use_learned_mask': getattr(args, 'cpc_use_learned_mask', True),
+            'loss_type': getattr(args, 'cpc_loss_type', 'l2'),
+            'pos_emb_dim': getattr(args, 'cpc_pos_emb_dim', 64),
+            'hidden_dim': getattr(args, 'cpc_hidden_dim', 256),
+        }
         
         self.model = LightweightModel(
             in_channels=args.enc_in,
@@ -582,17 +875,20 @@ class ClsModel(nn.Module):
             tfc_weight=tfc_weight,
             tfc_warmup_steps=tfc_warmup_steps,
             use_real_imag=use_real_imag,
+            use_warping=use_warping,
             projection_dim=projection_dim,
             patch_len=patch_len,
             stride=stride,
-            hidden_dim=args.d_model
+            hidden_dim=args.d_model,
+            use_cpc=use_cpc,
+            cpc_kwargs=cpc_kwargs,
         )
 
     def pretrain(self, x):
-        return self.model(x, noise_level=self.noise_level)
+        return self.model(x, add_noise_flag=True, noise_level=self.noise_level)
 
     def forecast(self, x):
-        return self.model(x)
+        return self.model(x, add_noise_flag=False)
     
     def forward(self, batch_x):
         if self.task_name == "pretrain":

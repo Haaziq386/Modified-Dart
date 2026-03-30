@@ -258,6 +258,26 @@ parser.add_argument('--use_real_imag', type=int, default=0,
                    help='use real/imag FFT features instead of amp/phase (0=False, 1=True)')
 parser.add_argument('--projection_dim', type=int, default=128, 
                    help='dimension of contrastive projection heads (default: 128)')
+parser.add_argument('--use_warping', type=int, default=0,
+                   help='enable adaptive frequency warping in frequency encoder (0=False, 1=True)')
+
+# CPC-TF (cross-modal predictive coding) parameters
+parser.add_argument('--use_cpc', type=int, default=0,
+                   help='enable CPC-TF auxiliary loss during pretraining (0=False, 1=True)')
+parser.add_argument('--cpc_lambda', type=float, default=0.1,
+                   help='weight for CPC-TF auxiliary losses')
+parser.add_argument('--cpc_freq_mask_ratio', type=float, default=0.2,
+                   help='mask ratio for frequency bins in CPC-TF')
+parser.add_argument('--cpc_time_mask_ratio', type=float, default=0.2,
+                   help='mask ratio for time patches in CPC-TF')
+parser.add_argument('--cpc_use_learned_mask', type=int, default=1,
+                   help='use learned mask tokens in CPC-TF (0=False, 1=True)')
+parser.add_argument('--cpc_loss_type', type=str, default='l2',
+                   help='reconstruction loss for CPC-TF: l2 or smooth_l1')
+parser.add_argument('--cpc_pos_emb_dim', type=int, default=64,
+                   help='positional embedding width used in CPC-TF predictors')
+parser.add_argument('--cpc_hidden_dim', type=int, default=256,
+                   help='hidden width used in CPC-TF predictors')
 
 ## SimMTM 
 # Pre-train
