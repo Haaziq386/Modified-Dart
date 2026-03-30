@@ -140,8 +140,9 @@ class Dataset_PEMS(Dataset):
         df = pd.DataFrame(data)
         df = df.fillna(method='ffill', limit=len(df)).fillna(method='bfill', limit=len(df)).values
 
-        self.data_x = df
-        self.data_y = df
+        # Keep contiguous float32 arrays to avoid problematic numpy storage in worker collation.
+        self.data_x = np.ascontiguousarray(df.astype(np.float32))
+        self.data_y = self.data_x
 
     def __getitem__(self, index):
         s_begin = index
@@ -149,8 +150,9 @@ class Dataset_PEMS(Dataset):
         r_begin = s_end - self.effective_label_len
         r_end = r_begin + self.effective_label_len + self.pred_len
 
-        seq_x = self.data_x[s_begin:s_end]
-        seq_y = self.data_y[r_begin:r_end]
+        # Return regular torch tensors so default_collate never operates on non-resizable numpy views.
+        seq_x = torch.tensor(self.data_x[s_begin:s_end], dtype=torch.float32)
+        seq_y = torch.tensor(self.data_y[r_begin:r_end], dtype=torch.float32)
         seq_x_mark = torch.zeros((seq_x.shape[0], 1))
         seq_y_mark = torch.zeros((seq_y.shape[0], 1))
 
