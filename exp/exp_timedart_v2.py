@@ -397,7 +397,7 @@ class Exp_TimeDART_v2(Exp_Basic):
         preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
         trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
 
-        mae, mse, _, _, _ = metric(preds, trues)
+        mae, mse, _, _, _,_,_ = metric(preds, trues)
         print(
             "{0}->{1}, mse:{2:.3f}, mae:{3:.3f}".format(
                 self.args.input_len, self.args.pred_len, mse, mae
