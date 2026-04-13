@@ -185,7 +185,7 @@ class TFC_Loss(nn.Module):
         super(TFC_Loss, self).__init__()
         self.temperature = temperature
     
-    def forward(self, z_time, z_freq, group_ids=None):
+    def forward(self, z_time, z_freq):
         batch_size = z_time.size(0)
         device = z_time.device
         
@@ -196,19 +196,6 @@ class TFC_Loss(nn.Module):
         z_freq = F.normalize(z_freq, dim=-1)
         
         sim_tf = torch.matmul(z_time, z_freq.T) / self.temperature
-        
-        if group_ids is not None:
-            same_group_mask = group_ids.unsqueeze(0) == group_ids.unsqueeze(1)
-            diag_mask = torch.eye(batch_size, dtype=torch.bool, device=device)
-            mask_out = same_group_mask & ~diag_mask
-            
-            valid_negatives = ~same_group_mask | diag_mask
-            has_valid_negatives = (valid_negatives & ~diag_mask).any(dim=1)
-            
-            if not has_valid_negatives.all():
-                return torch.tensor(0.0, device=device, requires_grad=True)
-            
-            sim_tf = sim_tf.masked_fill(mask_out, float('-inf'))
         
         labels = torch.arange(batch_size, device=device)
         loss_tf = F.cross_entropy(sim_tf, labels)
@@ -231,7 +218,6 @@ class CPCTFLoss(nn.Module):
         freq_mask_ratio=0.2,
         time_mask_ratio=0.2,
         lambda_cpc=0.1,
-        use_learned_mask=True,
         loss_type="l2",
         pos_emb_dim=64,
         hidden_dim=256,
@@ -241,7 +227,6 @@ class CPCTFLoss(nn.Module):
         self.freq_mask_ratio = float(freq_mask_ratio)
         self.time_mask_ratio = float(time_mask_ratio)
         self.lambda_cpc = float(lambda_cpc)
-        self.use_learned_mask = bool(use_learned_mask)
         self.loss_type = loss_type
         self.pos_emb_dim = int(pos_emb_dim)
         self.hidden_dim = int(hidden_dim)
@@ -252,8 +237,6 @@ class CPCTFLoss(nn.Module):
         self.time_predictor = None
         self.freq_pos_mlp = None
         self.time_pos_mlp = None
-        self.freq_mask_token = None
-        self.time_mask_token = None
 
     def _build(self, z_time_dim, z_freq_dim, feat_dim_freq, feat_dim_time):
         self.freq_pos_mlp = nn.Sequential(
@@ -282,13 +265,6 @@ class CPCTFLoss(nn.Module):
             nn.ReLU(),
             nn.Linear(hid_t, feat_dim_time),
         )
-
-        if self.use_learned_mask:
-            self.freq_mask_token = nn.Parameter(torch.zeros(feat_dim_freq))
-            self.time_mask_token = nn.Parameter(torch.zeros(feat_dim_time))
-        else:
-            self.register_buffer("freq_mask_token", torch.zeros(feat_dim_freq))
-            self.register_buffer("time_mask_token", torch.zeros(feat_dim_time))
 
         self._built = True
 
@@ -647,9 +623,6 @@ class LightweightModel(nn.Module):
         x_permuted = x_input.permute(0, 2, 1) 
         x_flat = x_permuted.reshape(batch_size * num_features, seq_len)
         
-        # Group IDs for TFC - each sample-feature pair is independent
-        group_ids = torch.arange(batch_size * num_features, device=x.device)
-        
         # 2. DUAL BACKBONE
         # ---------------------------------------------------
         
@@ -679,7 +652,7 @@ class LightweightModel(nn.Module):
         if self.task_name == "pretrain":
             z_time = self.time_projection(h_time)
             z_freq = self.freq_projection(h_freq)
-            loss_tfc = self.tfc_loss_fn(z_time, z_freq, group_ids=group_ids) * self.get_tfc_weight()
+            loss_tfc = self.tfc_loss_fn(z_time, z_freq) * self.get_tfc_weight()
             
             if self.training:
                 self.increment_step()
@@ -757,7 +730,6 @@ class Model(nn.Module):
             'freq_mask_ratio': getattr(args, 'cpc_freq_mask_ratio', 0.2),
             'time_mask_ratio': getattr(args, 'cpc_time_mask_ratio', 0.2),
             'lambda_cpc': getattr(args, 'cpc_lambda', 0.1),
-            'use_learned_mask': getattr(args, 'cpc_use_learned_mask', True),
             'loss_type': getattr(args, 'cpc_loss_type', 'l2'),
             'pos_emb_dim': getattr(args, 'cpc_pos_emb_dim', 64),
             'hidden_dim': getattr(args, 'cpc_hidden_dim', 256),
@@ -855,7 +827,6 @@ class ClsModel(nn.Module):
             'freq_mask_ratio': getattr(args, 'cpc_freq_mask_ratio', 0.2),
             'time_mask_ratio': getattr(args, 'cpc_time_mask_ratio', 0.2),
             'lambda_cpc': getattr(args, 'cpc_lambda', 0.1),
-            'use_learned_mask': getattr(args, 'cpc_use_learned_mask', True),
             'loss_type': getattr(args, 'cpc_loss_type', 'l2'),
             'pos_emb_dim': getattr(args, 'cpc_pos_emb_dim', 64),
             'hidden_dim': getattr(args, 'cpc_hidden_dim', 256),
