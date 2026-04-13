@@ -1,162 +1,171 @@
-# HtulTS - Lightweight Time Series Model with Forgetting Mechanisms
+# HtulTS (Current Model)
 
-## Overview
+HtulTS is a dual-branch time-series model used in this repo for:
+- self-supervised pretraining
+- forecasting fine-tuning
+- classification fine-tuning
 
-HtulTS is a lightweight time series model designed for both pretraining and downstream tasks (forecasting and classification). It features a shared linear backbone architecture with task-specific heads and optional forgetting mechanisms for improved transfer learning capabilities.  
-**⚠️This is a experimentation and in progress repository aiming to make a good Time Series Forecaster.**
+This README reflects the current implementation in `models/HtulTS.py`.
 
-## Key Features
+## Architecture Summary
 
-- **Shared Linear Backbone**: Efficient MLP-based backbone for feature extraction across all tasks
-- **Task-Specific Heads**: Separate heads optimized for:
-  - **Pretraining**: Denoising autoencoder for representation learning
-  - **Forecasting**: Regression head for time series prediction
-  - **Classification**: Convolutional layers for time series classification
-- **Forgetting Mechanisms**: Multiple strategies to reduce catastrophic forgetting during fine-tuning
-- **Noise Injection**: Optional Gaussian noise during pretraining for robust feature learning
+### 1) Time branch (patch-based)
+- Input is reshaped from `[B, L, C]` to `[B*C, L]`.
+- `PatchEmbedding` extracts overlapping 1D patches with configurable `patch_len` and `stride`.
+- Patch tokens are projected and flattened.
+- `patch_mixer` aggregates all patches into one global time embedding `h_time`.
 
-## Architecture Components
+### 2) Frequency branch (FFT-based)
+- `FrequencyEncoder` applies Hann-windowed `rFFT`.
+- Two feature modes:
+    - `use_real_imag=1`: real + imaginary channels
+    - `use_real_imag=0`: log-amplitude + sin(phase) + cos(phase)
+- Optional `AdaptiveFrequencyWarping` (`use_warping=1`) provides learnable monotonic re-indexing of frequency bins.
+- Frequency features are normalized per sample, flattened, then projected to `h_freq`.
 
-### 1. ForgettingMechanisms Module
+### 3) Fusion and optional forgetting
+- `LearnableFusion` combines `h_time` and `h_freq`.
+- Optional `ForgettingMechanisms` (mostly useful during finetune):
+    - `activation`
+    - `weight`
+    - `adaptive`
 
-Implements three types of forgetting strategies to prevent catastrophic forgetting:
+### 4) Task heads
+- `task_name=pretrain`: decoder reconstructs full input sequence.
+- `task_name=finetune` + `downstream_task=forecast`: residual forecasting head predicts `pred_len`.
+- `task_name=finetune` + `downstream_task=classification`: CNN classifier over fused features.
 
-```python
-class ForgettingMechanisms(nn.Module):
-    """Learnable forgetting gates and adaptive mechanisms"""
-```
+## Pretraining Objectives
 
-**Forgetting Types:**
-- `activation`: Learnable forgetting gates applied to activation patterns
-- `weight`: Weight-level importance scoring with decay
-- `adaptive`: Adaptive forgetting based on gradient magnitude
+Pretraining returns `(reconstruction, aux_loss)` where:
+- reconstruction loss is MSE between input and reconstruction (computed in trainer)
+- auxiliary loss is:
+    - TF-C loss (`TFC_Loss`) always enabled in pretrain path
+    - optional CPC-TF loss (`CPCTFLoss`) when `use_cpc=1`
 
-### 2. LightweightModel
+Total pretraining loss used in `exp/exp_htults.py`:
 
-Core model architecture with shared backbone and task-specific heads:
+`total_loss = recon_loss + aux_loss`
 
-```python
-class LightweightModel(nn.Module):
-    """
-    Shared linear backbone + task-specific heads
-    """
-```
+When CPC-TF is enabled, `aux_loss` internally is:
 
-**Shared Backbone:**
-- 2-layer MLP with ReLU activations
-- Hidden dimension: 512
-- Dropout: 0.2 and 0.1
+`loss_tfc + cpc_lambda * (loss_time_to_freq + loss_freq_to_time)`
 
-**Task-Specific Heads:**
+TF-C supports warmup through `tfc_warmup_steps`.
 
-| Task | Head Type | Components |
-|------|-----------|------------|
-| Pretraining | Linear Decoder | Single linear layer mapping to input length |
-| Forecasting | Regression Head | 2-layer MLP with dropout for prediction length |
-| Classification | CNN Classifier | 3-layer Conv1d + adaptive pooling + classifier |
+## Main Runtime Arguments
 
-### 3. Model (Forecasting)
+### Core
+- `--task_name`: `pretrain` or `finetune`
+- `--downstream_task`: `forecast` or `classification`
+- `--model HtulTS`
+- `--input_len`, `--pred_len`, `--enc_in`, `--d_model`
 
-Wrapper for pretraining and forecasting tasks:
+### Time branch
+- `--patch_len` (default 16)
+- `--stride` (default 8)
 
-```python
-class Model(nn.Module):
-    """TimeDART forecasting model"""
-```
+### Frequency branch / TF-C
+- `--use_real_imag` (0/1)
+- `--use_warping` (0/1)
+- `--projection_dim` (default 128)
+- `--tfc_weight` (default 0.05)
+- `--tfc_warmup_steps` (default 0)
 
-**Methods:**
-- `pretrain()`: Denoising autoencoder training
-- `forecast()`: Time series forecasting
-- Automatic normalization/denormalization
+### CPC-TF (optional)
+- `--use_cpc` (0/1)
+- `--cpc_lambda`
+- `--cpc_freq_mask_ratio`
+- `--cpc_time_mask_ratio`
+- `--cpc_use_learned_mask` (0/1)
+- `--cpc_loss_type` (`l2` or `smooth_l1`)
+- `--cpc_pos_emb_dim`
+- `--cpc_hidden_dim`
 
-### 4. ClsModel (Classification)
+### Regularization / transfer
+- `--use_noise` (pretrain)
+- `--noise_level`
+- `--use_forgetting` (finetune)
+- `--forgetting_type`
+- `--forgetting_rate`
+- `--use_norm`
 
-Specialized model for classification tasks:
+## Example Commands
 
-```python
-class ClsModel(nn.Module):
-    """TimeDART classification model"""
-```
-
-## Configuration Parameters
-
-### Model Parameters
-
-```python
-args.input_len          # Input sequence length (default: 336)
-args.pred_len           # Prediction length (for forecasting)
-args.enc_in             # Input channels/features
-args.task_name          # "pretrain" or "finetune"
-args.downstream_task    # "forecast" or "classification"
-args.use_norm           # Apply normalization (default: True)
-```
-
-### Noise Parameters
-
-```python
-args.use_noise          # Enable noise injection during pretraining
-args.noise_level        # Noise scaling factor (default: 0.1)
-```
-
-### Forgetting Parameters
-
-```python
-args.use_forgetting     # Enable forgetting mechanisms
-args.forgetting_type    # "activation", "weight", or "adaptive"
-args.forgetting_rate    # Forgetting rate (default: 0.1)
-```
-
-## Training and Evaluation
-
+### Pretrain (forecast setting)
 ```bash
-sh scripts/pretrain/ETTh2.sh && sh scripts/finetune/ETTh2.sh
+python run.py \
+    --task_name pretrain \
+    --downstream_task forecast \
+    --is_training 1 \
+    --model_id HtulTS_ETTh1 \
+    --model HtulTS \
+    --data ETTh1 \
+    --features M \
+    --input_len 336 \
+    --pred_len 96 \
+    --enc_in 7 \
+    --d_model 512 \
+    --patch_len 16 \
+    --stride 8 \
+    --tfc_weight 0.05 \
+    --tfc_warmup_steps 500 \
+    --use_real_imag 1 \
+    --use_warping 0 \
+    --use_cpc 1 \
+    --cpc_lambda 0.1
 ```
 
+### Finetune (forecast)
+```bash
+python run.py \
+    --task_name finetune \
+    --downstream_task forecast \
+    --is_training 1 \
+    --model_id HtulTS_ETTh1 \
+    --model HtulTS \
+    --data ETTh1 \
+    --features M \
+    --input_len 336 \
+    --pred_len 96 \
+    --enc_in 7 \
+    --d_model 512 \
+    --patch_len 16 \
+    --stride 8 \
+    --use_forgetting 1 \
+    --forgetting_type activation \
+    --forgetting_rate 0.1
+```
+
+### Finetune (classification)
+```bash
+python run.py \
+    --task_name finetune \
+    --downstream_task classification \
+    --is_training 1 \
+    --model_id HtulTS_UCR \
+    --model HtulTS \
+    --data ECG \
+    --input_len 512 \
+    --enc_in 1 \
+    --num_classes 2
+```
+
+## Checkpoints and Logging
+
+- Pretrain checkpoints: `./outputs/pretrain_checkpoints/<dataset>/`
+- Finetune checkpoints: `./outputs/checkpoints/<setting>/`
+- Test outputs: `./outputs/test_results/`
+- TensorBoard logs: `./outputs/logs/`
+
+Checkpoint loading is shape-safe in `exp/exp_htults.py`:
+- mismatched keys are skipped
+- loading uses `strict=False`
+
+This is expected when transferring from pretrain to finetune because pretrain-only modules (for example decoder/CPC modules) are not needed in downstream heads.
 
 ## Related Files
 
-- [HtulTS.py](models/HtulTS.py) - Model architecture
-- [exp_htults.py](exp/exp_htults.py) - Training pipeline
-- [Main README](README.md) - Project overview
-
-## Notes
-
-- Checkpoints are saved to `./outputs/pretrain_checkpoints/` during pretraining
-- Fine-tuning checkpoints go to `./outputs/checkpoints/`
-- Test results and metrics saved to `./outputs/test_results/`
-- TensorBoard logs available in `./outputs/logs/`
-
-# QUICK_REFERENCE.sh - Copy-paste commands for logging
-
-# ============================================================
-# QUICK START - Copy and paste these commands
-# ============================================================
-
-# RUN EVERYTHING WITH LOGGING (RECOMMENDED):
-sh scripts/run_with_logs.sh ETTh1
-
-# RUN PRETRAIN ONLY:
-sh scripts/pretrain_ETTh1_with_logs.sh
-
-# RUN FINETUNE ONLY:
-sh scripts/finetune_ETTh1_with_logs.sh
-
-# RUN BOTH (CHAINED):
-sh scripts/pretrain_ETTh1_with_logs.sh && sh scripts/finetune_ETTh1_with_logs.sh
-
-# MANUAL LOG VIEWING:
-cat outputs/logs/pretrain_ETTh1_*.log | tail -50
-cat outputs/logs/finetune_ETTh1_*.log | tail -50
-ls -lh outputs/logs/
-
-# ============================================================
-# KEY POINTS:
-# ============================================================
-# 
-# 1. All logs saved to: outputs/logs/
-# 2. Log format: <phase>_<dataset>_<YYYYMMDD_HHMMSS>.log
-# 3. Output appears on terminal AND saved to file
-# 4. Supports any dataset name automatically
-# 5. Use log_viewer.sh to quickly check latest logs
-#
-# ============================================================
+- `models/HtulTS.py`: full model implementation
+- `exp/exp_htults.py`: training/validation/testing loops
+- `run.py`: CLI arguments and experiment entrypoint
