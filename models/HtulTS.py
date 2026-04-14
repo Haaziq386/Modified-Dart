@@ -610,7 +610,7 @@ class LightweightModel(nn.Module):
         
         # 1. INPUT AUGMENTATION (Masking vs Noise)
         # ---------------------------------------------------
-        if self.task_name == "pretrain":
+        if self.task_name == "pretrain" and self.training:
             # Pretraining augmentation: noise or masking
             if self.use_noise and add_noise_flag:
                 x_input, _ = self.add_noise(x, noise_level=noise_level)

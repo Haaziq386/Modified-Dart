@@ -139,3 +139,5 @@ dmypy.json
 *.Zone.Identifier
 datasets/
 outputs/
+test_results/
+results/
