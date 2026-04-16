@@ -179,7 +179,7 @@ class PatchEmbedding(nn.Module):
 
 class TFC_Loss(nn.Module):
     """
-    Time-Frequency Consistency Loss using NT-Xent with group support.
+    Time-Frequency Consistency Loss using INFONCE.
     """
     def __init__(self, temperature=0.2):
         super(TFC_Loss, self).__init__()
