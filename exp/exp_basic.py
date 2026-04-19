@@ -1,6 +1,6 @@
 import os
 import torch
-from models import HtulTS, TimeDART, SimMTM, PatchTST, TimeDART_v2
+from models import HtulTS, TimeDART, SimMTM, PatchTST, TimeDART_v2, TimePerciever
 
 
 class Exp_Basic(object):
@@ -11,7 +11,8 @@ class Exp_Basic(object):
             'HtulTS': HtulTS,
             'SimMTM': SimMTM,
             'PatchTST': PatchTST,
-            'TimeDART_v2': TimeDART_v2
+            'TimeDART_v2': TimeDART_v2,
+            'TimePerciever': TimePerciever,
         }
         self.device = self._acquire_device()
         self.model = self._build_model().to(self.device)

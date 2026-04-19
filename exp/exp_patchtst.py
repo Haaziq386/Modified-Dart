@@ -1,6 +1,6 @@
 from data_provider.data_factory import data_provider
 from exp.exp_basic import Exp_Basic
-from models import PatchTST
+from models import PatchTST, Dlinear
 from utils.tools import EarlyStopping, adjust_learning_rate, visual, test_params_flop
 from utils.metrics import metric
 
@@ -22,7 +22,11 @@ class Exp_PatchTST(Exp_Basic):
         super(Exp_PatchTST, self).__init__(args)
 
     def _build_model(self):
-        model = PatchTST.Model(self.args).float()
+        model_dict = {
+            'PatchTST': PatchTST,
+            'DLinear': Dlinear,
+        }
+        model = model_dict[self.args.model].Model(self.args).float()
 
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)

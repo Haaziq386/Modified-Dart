@@ -5,6 +5,7 @@ from exp.exp_timedart_v2 import Exp_TimeDART_v2
 from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
 from exp.exp_patchtst import Exp_PatchTST
+from exp.exp_timeperciever import Exp_Main as Exp_TimePerciever
 import random
 import numpy as np
 import os
@@ -38,6 +39,7 @@ parser.add_argument(
 parser.add_argument(
     "--backbone", type=str, default="Qwen2.5-0.5B", help="backbone model name"
 )
+parser.add_argument('--inverse', action='store_true', help='inverse output data', default=False)
 # data loader
 parser.add_argument(
     "--data", type=str, required=True, default="ETTh1", help="dataset type"
@@ -288,6 +290,28 @@ parser.add_argument('--temperature', type=float, default=0.2, help='temperature'
 parser.add_argument('--masked_rule', type=str, default='geometric', help='geometric, random, masked tail, masked head')
 parser.add_argument('--mask_rate', type=float, default=0.5, help='mask ratio')
 
+# PatchTST FLOP computation
+parser.add_argument(
+    "--test_flop",
+    action="store_true",
+    help="compute FLOPs during PatchTST test",
+    default=False,
+)
+
+parser.add_argument('--do_predict', action='store_true', help='whether to predict unseen future data')
+
+# TimePerciever
+parser.add_argument("--query_share", type=int, default=1, help="share positional embedding as query (1=True, 0=False)")
+parser.add_argument("--use_latent", type=int, default=1, help="use latent bottleneck (1=True, 0=False)")
+parser.add_argument("--num_latents", type=int, default=32, help="number of latent tokens")
+parser.add_argument("--latent_dim", type=int, default=64, help="dimension of latent tokens")
+parser.add_argument("--num_latent_blocks", type=int, default=1, help="number of latent processing blocks")
+parser.add_argument("--latent_d_ff", type=int, default=128, help="latent MLP hidden dimension")
+parser.add_argument("--weight_decay", type=float, default=0.0, help="AdamW weight decay")
+parser.add_argument("--warmup_epochs", type=int, default=0, help="number of warmup epochs")
+parser.add_argument("--standard", type=int, default=1, help="use standard supervised formulation (1=True, 0=False)")
+parser.add_argument("--generalized", type=int, default=0, help="use generalized random-split formulation (1=True, 0=False)")
+parser.add_argument("--separate_ratio", type=float, default=1.0, help="ratio of future patches to randomly swap into context")
 
 args = parser.parse_args()
 args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
@@ -306,11 +330,13 @@ Exp_map = {
     "TimeDART_v2": Exp_TimeDART_v2,
     "SimMTM": Exp_SimMTM,
     "PatchTST": Exp_PatchTST,
+    "DLinear": Exp_PatchTST,
+    "TimePerciever": Exp_TimePerciever,
 }
 
 Exp = Exp_map[args.model]
 
-if args.model == "PatchTST":
+if args.model in ["PatchTST", "DLinear"]:
     if args.is_training:
         for ii in range(args.itr):
             setting = "{}_{}_{}_ft{}_sl{}_ll{}_pl{}_dm{}_nh{}_el{}_dl{}_df{}_fc{}_eb{}_dt{}_{}_{}".format(
@@ -367,6 +393,32 @@ if args.model == "PatchTST":
             ii,
         )
         exp = Exp(args)
+        print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+        exp.test(setting, test=1)
+        torch.cuda.empty_cache()
+
+elif args.model == "TimePerciever":
+    setting = "{}_{}_{}_{}_sl{}_pl{}_dm{}_df{}_nh{}_{}".format(
+        args.model_id,
+        args.model,
+        args.data,
+        args.features,
+        args.seq_len,
+        args.pred_len,
+        args.d_model,
+        args.d_ff,
+        args.n_heads,
+        args.des,
+    )
+    exp = Exp_map[args.model](args)
+    if args.is_training:
+        for ii in range(args.itr):
+            print(">>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
+            exp.train(setting)
+            print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+            exp.test(setting)
+            torch.cuda.empty_cache()
+    else:
         print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
         exp.test(setting, test=1)
         torch.cuda.empty_cache()
