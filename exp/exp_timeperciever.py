@@ -9,6 +9,7 @@ import os
 import time
 import warnings
 import numpy as np
+import math
 from utils.random_split import random_split_patches
 
 warnings.filterwarnings('ignore')
@@ -54,11 +55,11 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
                 else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
                 f_dim = -1 if self.args.features == 'MS' else 0
-                outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                outputs = outputs[:, :self.args.pred_len, f_dim:]
                 batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
 
                 pred = outputs.detach().cpu()
@@ -129,16 +130,16 @@ class Exp_Main(Exp_Basic):
                 if self.args.standard:
                     if self.args.use_amp:
                         with torch.cuda.amp.autocast():
-                            outputs1 = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                            outputs1 = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
                             f_dim = -1 if self.args.features == 'MS' else 0
-                            outputs1 = outputs1[:, -self.args.pred_len:, f_dim:]
+                            outputs1 = outputs1[:, :self.args.pred_len, f_dim:]
                             batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                             loss = criterion(outputs1, batch_y)
                             train_loss.append(loss.item())
                     else:
-                        outputs1 = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                        outputs1 = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
                         f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs1 = outputs1[:, -self.args.pred_len:, f_dim:]
+                        outputs1 = outputs1[:, :self.args.pred_len, f_dim:]
                         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
                         loss = criterion(outputs1, batch_y)
                         train_loss.append(loss.item())
@@ -146,20 +147,20 @@ class Exp_Main(Exp_Basic):
                 # Generalized Formulation
                 if self.args.generalized:
                     tensor = torch.cat([batch_x, batch_y[:, -self.args.pred_len:, 0:]], dim=1)
-                    batch_x2, batch_y2, indices = random_split_patches(tensor, self.args.pred_len // self.args.patch_len, self.args.patch_len, self.args.separate_ratio)
+                    batch_x2, batch_y2, indices = random_split_patches(tensor, math.ceil(self.args.pred_len / self.args.patch_len), self.args.patch_len, self.args.separate_ratio)
                     if self.args.use_amp:
                         with torch.cuda.amp.autocast():
                             outputs2 = self.model(batch_x2, batch_x_mark, dec_inp, batch_y_mark, indices)
                             f_dim = -1 if self.args.features == 'MS' else 0
-                            outputs2 = outputs2[:, -self.args.pred_len:, f_dim:]
-                            batch_y2 = batch_y2[:, -self.args.pred_len:, f_dim:].to(self.device)
+                            outputs2 = outputs2[:, :self.args.pred_len, f_dim:]
+                            batch_y2 = batch_y2[:, :self.args.pred_len, f_dim:].to(self.device)
                             loss = criterion(outputs2, batch_y2)
                             train_loss.append(loss.item())
                     else:
                         outputs2 = self.model(batch_x2, batch_x_mark, dec_inp, batch_y_mark, indices)
                         f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs2 = outputs2[:, -self.args.pred_len:, f_dim:]
-                        batch_y2 = batch_y2[:, -self.args.pred_len:, f_dim:].to(self.device)
+                        outputs2 = outputs2[:, :self.args.pred_len, f_dim:]
+                        batch_y2 = batch_y2[:, :self.args.pred_len, f_dim:].to(self.device)
                         loss = criterion(outputs2, batch_y2)
                         train_loss.append(loss.item())
 
@@ -223,12 +224,12 @@ class Exp_Main(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len )), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
                 else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len )), list(range(self.args.seq_len // self.args.patch_len, (self.args.seq_len + self.args.pred_len) // self.args.patch_len))))
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, (list(range(0, self.args.seq_len // self.args.patch_len)), list(range(self.args.seq_len // self.args.patch_len, self.args.seq_len // self.args.patch_len + math.ceil(self.args.pred_len / self.args.patch_len)))))
 
                 f_dim = -1 if self.args.features == 'MS' else 0
-                outputs = outputs[:, -self.args.pred_len:, :]
+                outputs = outputs[:, :self.args.pred_len, :]
                 batch_y = batch_y[:, -self.args.pred_len:, :].to(self.device)
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()

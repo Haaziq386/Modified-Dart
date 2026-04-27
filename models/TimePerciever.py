@@ -9,7 +9,7 @@ class Model(nn.Module):
         super(Model, self).__init__()
         self.patch_size = configs.patch_len
         self.past_patch_num = configs.seq_len // configs.patch_len
-        self.future_patch_num = configs.pred_len // configs.patch_len
+        self.future_patch_num = math.ceil(configs.pred_len / configs.patch_len)
         self.embed_dim = configs.d_model
         self.pred_len = configs.pred_len
         self.query_share = configs.query_share
@@ -89,6 +89,7 @@ class Model(nn.Module):
         outputs = self.output_projection(outputs)
 
         outputs = outputs.view(batch_size, in_channels, -1).contiguous().permute(0, 2, 1) # (B, S, C)
+        outputs = outputs[:, :self.pred_len, :]
 
         outputs = outputs * \
             (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
