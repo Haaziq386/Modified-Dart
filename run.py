@@ -6,6 +6,7 @@ from exp.exp_simmtm import Exp_SimMTM
 from exp.exp_htults import Exp_HtulTS
 from exp.exp_patchtst import Exp_PatchTST
 from exp.exp_timeperciever import Exp_Main as Exp_TimePerciever
+from exp.exp_conv_time_net import Exp_Main as Exp_ConvTimeNet
 import random
 import numpy as np
 import os
@@ -167,6 +168,16 @@ parser.add_argument(
     default="end",
     help="None: None; end: padding on the end",
 )
+
+# ConvTimeNet
+parser.add_argument('--dw_ks', type=str, default='11,15,21,29,39,51',
+                    help="kernel sizes of the deep-wise conv layers (comma separated, length must equal e_layers)")
+parser.add_argument('--re_param', type=int, default=1, help='Reparam the DeepWise Conv when train')
+parser.add_argument('--enable_res_param', type=int, default=1, help='Learnable residual')
+parser.add_argument('--re_param_kernel', type=int, default=3, help='small kernel size used in re-parameterization')
+parser.add_argument('--patch_ks', type=int, default=32, help='kernel size of the patch window for ConvTimeNet')
+parser.add_argument('--patch_sd', type=float, default=0.5,
+                    help='stride of the patch window for ConvTimeNet. if <= 1, sd = patch_sd * patch_ks')
 parser.add_argument(
     "--revin", type=int, default=1, help="RevIN; True 1 False 0"
 )
@@ -316,6 +327,12 @@ parser.add_argument("--separate_ratio", type=float, default=1.0, help="ratio of 
 args = parser.parse_args()
 args.use_gpu = True if torch.cuda.is_available() and args.use_gpu else False
 
+if args.model == "ConvTimeNet":
+    if isinstance(args.dw_ks, str):
+        args.dw_ks = [int(ks) for ks in args.dw_ks.split(',')]
+    args.patch_sd = max(1, int(args.patch_ks * args.patch_sd)) if args.patch_sd <= 1 else int(args.patch_sd)
+    assert args.e_layers == len(args.dw_ks), "e_layers should match the dw kernel list!"
+
 if args.use_gpu and args.use_multi_gpu:
     args.devices = args.devices.replace(" ", "")
     device_ids = args.devices.split(",")
@@ -332,6 +349,7 @@ Exp_map = {
     "PatchTST": Exp_PatchTST,
     "DLinear": Exp_PatchTST,
     "TimePerciever": Exp_TimePerciever,
+    "ConvTimeNet": Exp_ConvTimeNet,
 }
 
 Exp = Exp_map[args.model]
@@ -389,6 +407,61 @@ if args.model in ["PatchTST", "DLinear"]:
             args.factor,
             args.embed,
             args.distil,
+            args.des,
+            ii,
+        )
+        exp = Exp(args)
+        print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+        exp.test(setting, test=1)
+        torch.cuda.empty_cache()
+
+elif args.model == "ConvTimeNet":
+    if args.is_training:
+        for ii in range(args.itr):
+            setting = "{}_{}_{}_ft{}_sl{}_pl{}_dm{}_df{}_el{}_dk{}_pk{}_ps{}_erp{}_rp{}_{}_{}".format(
+                args.model_id,
+                args.model,
+                args.data,
+                args.features,
+                args.seq_len,
+                args.pred_len,
+                args.d_model,
+                args.d_ff,
+                args.e_layers,
+                args.dw_ks,
+                args.patch_ks,
+                args.patch_sd,
+                args.enable_res_param,
+                args.re_param,
+                args.des,
+                ii,
+            )
+
+            exp = Exp(args)
+            print(">>>>>>>start training : {}>>>>>>>>>>>>>>>>>>>>>>>>>>".format(setting))
+            exp.train(setting)
+
+            print(">>>>>>>testing : {}<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<".format(setting))
+            exp.test(setting)
+
+            torch.cuda.empty_cache()
+    else:
+        ii = 0
+        setting = "{}_{}_{}_ft{}_sl{}_pl{}_dm{}_df{}_el{}_dk{}_pk{}_ps{}_erp{}_rp{}_{}_{}".format(
+            args.model_id,
+            args.model,
+            args.data,
+            args.features,
+            args.seq_len,
+            args.pred_len,
+            args.d_model,
+            args.d_ff,
+            args.e_layers,
+            args.dw_ks,
+            args.patch_ks,
+            args.patch_sd,
+            args.enable_res_param,
+            args.re_param,
             args.des,
             ii,
         )
