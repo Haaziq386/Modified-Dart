@@ -1,171 +1,109 @@
-# HtulTS (Current Model)
+# TFMIX: Lightweight Dual-Domain Pre-Training for Time Series Forecasting
 
-HtulTS is a dual-branch time-series model used in this repo for:
-- self-supervised pretraining
-- forecasting fine-tuning
-- classification fine-tuning
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Conference](https://img.shields.io/badge/NeurIPS-2026-4b44ce.svg)](https://neurips.cc/)
 
-This README reflects the current implementation in `models/HtulTS.py`.
+This is the official PyTorch implementation for the paper **TFMIX: Lightweight Dual-Domain Pre-Training for Time Series Forecasting with Adaptive Frequency Warping and Post-Pretraining Forgetting** (NeurIPS 2026).
 
-## Architecture Summary
+## Abstract
 
-### 1) Time branch (patch-based)
-- Input is reshaped from `[B, L, C]` to `[B*C, L]`.
-- `PatchEmbedding` extracts overlapping 1D patches with configurable `patch_len` and `stride`.
-- Patch tokens are projected and flattened.
-- `patch_mixer` aggregates all patches into one global time embedding `h_time`.
+Self-supervised pre-training has become a compelling paradigm for time-series analysis, yet most methods commit to a single representational domain, either temporal or spectral, and couple it with heavyweight Transformer or diffusion stacks, which limits deployment efficiency and transfer across horizons.
 
-### 2) Frequency branch (FFT-based)
-- `FrequencyEncoder` applies Hann-windowed `rFFT`.
-- Two feature modes:
-    - `use_real_imag=1`: real + imaginary channels
-    - `use_real_imag=0`: log-amplitude + sin(phase) + cos(phase)
-- Optional `AdaptiveFrequencyWarping` (`use_warping=1`) provides learnable monotonic re-indexing of frequency bins.
-- Frequency features are normalized per sample, flattened, then projected to `h_freq`.
+We propose **TFMIX**, a lightweight self-supervised framework that unifies temporal and spectral modelling through a dual-backbone architecture with only a fraction of the parameters of Transformer-based baselines. By replacing Transformer encoders with simple MLP-based components, TFMIX achieves up to 8x parameter reduction while maintaining competitive accuracy.
 
-### 3) Fusion and optional forgetting
-- `LearnableFusion` combines `h_time` and `h_freq`.
-- Optional `ForgettingMechanisms` (mostly useful during finetune):
-    - `activation`
-    - `weight`
-    - `adaptive`
+## Model Architecture
 
-### 4) Task heads
-- `task_name=pretrain`: decoder reconstructs full input sequence.
-- `task_name=finetune` + `downstream_task=forecast`: residual forecasting head predicts `pred_len`.
-- `task_name=finetune` + `downstream_task=classification`: CNN classifier over fused features.
+![TFMIX Architecture](assets/model.jpeg)
 
-## Pretraining Objectives
+TFMIX combines three core innovations:
 
-Pretraining returns `(reconstruction, aux_loss)` where:
-- reconstruction loss is MSE between input and reconstruction (computed in trainer)
-- auxiliary loss is:
-    - TF-C loss (`TFC_Loss`) always enabled in pretrain path
-    - optional CPC-TF loss (`CPCTFLoss`) when `use_cpc=1`
+- **Dual-Domain Backbones**: A patch-based MLP mixer that aggregates overlapping patches into a global temporal representation, combined with a frequency encoder that applies windowed FFT to extract spectral features including log-amplitude and trigonometric phase components.
+- **Adaptive Frequency Warping (AFW)**: A lightweight, monotonic, cumulative-softplus parameterisation that learns a task-adapted reindexing of FFT bins via bilinear interpolation on a learnable grid, adding fewer than $M$ scalar parameters.
+- **Time-Frequency Consistency & Forgetting**: A learnable fusion head that is aligned across domains by a symmetric cross-modal InfoNCE objective adapted from time-frequency consistency. For downstream adaptation, we further introduce a post-pretraining forgetting module supporting activation-gated, weight-gated, and adaptive variants that suppress pre-training-specific features that do not transfer to long-horizon forecasting.
 
-Total pretraining loss used in `exp/exp_htults.py`:
+## Main Results
 
-`total_loss = recon_loss + aux_loss`
+Across twelve public forecasting benchmarks, TFMIX matches or surpasses strong self-supervised (SimMTM, TimeDART) and supervised (PatchTST, DLinear) baselines, attaining the lowest MSE and MAE on six datasets (ETTh2, ETTm1, ETTm2, Electricity, PEMS07, and Exchange).
 
-When CPC-TF is enabled, `aux_loss` internally is:
+![Main Results](assets/results.png)
 
-`loss_tfc + cpc_lambda * (loss_time_to_freq + loss_freq_to_time)`
+**Parameter Efficiency:** At $H=720$ on the Exchange dataset, TFMIX requires only 4.72 M fine-tuning parameters, compared to 15.88 M for TimeDART and 31.23 M for SimMTM.
 
-TF-C supports warmup through `tfc_warmup_steps`.
+## Getting Started
 
-## Main Runtime Arguments
+### Environment Setup
 
-### Core
-- `--task_name`: `pretrain` or `finetune`
-- `--downstream_task`: `forecast` or `classification`
-- `--model HtulTS`
-- `--input_len`, `--pred_len`, `--enc_in`, `--d_model`
+The code was developed and tested using PyTorch.
 
-### Time branch
-- `--patch_len` (default 16)
-- `--stride` (default 8)
-
-### Frequency branch / TF-C
-- `--use_real_imag` (0/1)
-- `--use_warping` (0/1)
-- `--projection_dim` (default 128)
-- `--tfc_weight` (default 0.05)
-- `--tfc_warmup_steps` (default 0)
-
-### CPC-TF (optional)
-- `--use_cpc` (0/1)
-- `--cpc_lambda`
-- `--cpc_freq_mask_ratio`
-- `--cpc_time_mask_ratio`
-- `--cpc_use_learned_mask` (0/1)
-- `--cpc_loss_type` (`l2` or `smooth_l1`)
-- `--cpc_pos_emb_dim`
-- `--cpc_hidden_dim`
-
-### Regularization / transfer
-- `--use_noise` (pretrain)
-- `--noise_level`
-- `--use_forgetting` (finetune)
-- `--forgetting_type`
-- `--forgetting_rate`
-- `--use_norm`
-
-## Example Commands
-
-### Pretrain (forecast setting)
 ```bash
-python run.py \
-    --task_name pretrain \
-    --downstream_task forecast \
-    --is_training 1 \
-    --model_id HtulTS_ETTh1 \
-    --model HtulTS \
-    --data ETTh1 \
-    --features M \
-    --input_len 336 \
-    --pred_len 96 \
-    --enc_in 7 \
-    --d_model 512 \
-    --patch_len 16 \
-    --stride 8 \
-    --tfc_weight 0.05 \
-    --tfc_warmup_steps 500 \
-    --use_real_imag 1 \
-    --use_warping 0 \
-    --use_cpc 1 \
-    --cpc_lambda 0.1
+conda create -n tfmix python=3.10
+conda activate tfmix
+pip install -r requirements.txt
 ```
 
-### Finetune (forecast)
+### Data Preparation
+
+We evaluate on 12 standard benchmarks spanning energy, weather, financial, and traffic domains:
+
+- ETT datasets: ETTh1, ETTh2, ETTm1, ETTm2
+- Electricity, Traffic, Weather, Exchange
+- PEMS traffic datasets: PEMS03, PEMS04, PEMS07, PEMS08
+
+Place the downloaded datasets into the `./dataset/` directory.
+
+### Usage
+
+All experimental scripts can be found in the `./scripts/` directory. We use a channel-independent strategy where the normalized batch is reshaped as $X_{flat} \in \mathbb{R}^{(B\cdot C)\times L}$ and all subsequent operations apply identically to each univariate instance.
+
+#### Pre-training
+
+To pre-train TFMIX on the ETTh1 dataset using the default hyperparameters:
+
 ```bash
-python run.py \
-    --task_name finetune \
-    --downstream_task forecast \
-    --is_training 1 \
-    --model_id HtulTS_ETTh1 \
-    --model HtulTS \
-    --data ETTh1 \
-    --features M \
-    --input_len 336 \
-    --pred_len 96 \
-    --enc_in 7 \
-    --d_model 512 \
-    --patch_len 16 \
-    --stride 8 \
-    --use_forgetting 1 \
-    --forgetting_type activation \
-    --forgetting_rate 0.1
+python run_pretrain.py \
+  --dataset ETTh1 \
+  --seq_len 336 \
+  --d_model 128 \
+  --patch_len 16 \
+  --stride 8 \
+  --tfc_weight 0.05 \
+  --mask_ratio 0.4 \
+  --batch_size 16 \
+  --train_epochs 50
 ```
 
-### Finetune (classification)
+#### Fine-tuning
+
+To fine-tune the pre-trained model for long-horizon forecasting, for example $H=96$:
+
 ```bash
-python run.py \
-    --task_name finetune \
-    --downstream_task classification \
-    --is_training 1 \
-    --model_id HtulTS_UCR \
-    --model HtulTS \
-    --data ECG \
-    --input_len 512 \
-    --enc_in 1 \
-    --num_classes 2
+python run_finetune.py \
+  --dataset ETTh1 \
+  --seq_len 336 \
+  --pred_len 96 \
+  --d_model 128 \
+  --forgetting_type activation \
+  --forgetting_rate 0.15 \
+  --batch_size 16 \
+  --train_epochs 10 \
+  --pretrained_ckpt ./checkpoints/pretrain_ETTh1.pth
 ```
 
-## Checkpoints and Logging
+For PEMS datasets, the standard look-back window is $L=36$ with horizons $H \in \{12, 24, 36, 48\}$.
 
-- Pretrain checkpoints: `./outputs/pretrain_checkpoints/<dataset>/`
-- Finetune checkpoints: `./outputs/checkpoints/<setting>/`
-- Test outputs: `./outputs/test_results/`
-- TensorBoard logs: `./outputs/logs/`
+## Citation
 
-Checkpoint loading is shape-safe in `exp/exp_htults.py`:
-- mismatched keys are skipped
-- loading uses `strict=False`
+If you find this repository useful for your research, please consider citing our paper:
 
-This is expected when transferring from pretrain to finetune because pretrain-only modules (for example decoder/CPC modules) are not needed in downstream heads.
+```bibtex
+@inproceedings{tfmix2026,
+  title={TFMIX: Lightweight Dual-Domain Pre-Training for Time Series Forecasting with Adaptive Frequency Warping and Post-Pretraining Forgetting},
+  author={Anonymous},
+  booktitle={Advances in Neural Information Processing Systems (NeurIPS)},
+  year={2026}
+}
+```
 
-## Related Files
+## Acknowledgements
 
-- `models/HtulTS.py`: full model implementation
-- `exp/exp_htults.py`: training/validation/testing loops
-- `run.py`: CLI arguments and experiment entrypoint
+We build upon the excellent codebases of PatchTST, SimMTM, and TimeDART. We thank the authors for open-sourcing their work.
