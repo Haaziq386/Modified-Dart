@@ -8,6 +8,18 @@ import time
 
 plt.switch_backend('agg')
 
+def warm_up(optimizer, now_epoch, args):
+
+    lr = args.learning_rate * (now_epoch+1) / args.warmup_epochs
+    for param_group in optimizer.param_groups:
+        if "lr_scale" in param_group:
+            param_group["lr"] = lr * param_group["lr_scale"]
+        else:
+            param_group["lr"] = lr
+        print(f'Updating learning rate to {lr:.7f}')
+
+    return
+
 def adjust_learning_rate(optimizer, scheduler, epoch, args, printout=True):
     # lr = args.learning_rate * (0.2 ** (epoch // 2))
     if args.lradj == 'type1':
