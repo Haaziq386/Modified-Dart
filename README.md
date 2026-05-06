@@ -1,9 +1,6 @@
 # TFMIX: Lightweight Dual-Domain Pre-Training for Time Series Forecasting
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Conference](https://img.shields.io/badge/NeurIPS-2026-4b44ce.svg)](https://neurips.cc/)
-
-This is the official PyTorch implementation for the paper **TFMIX: Lightweight Dual-Domain Pre-Training for Time Series Forecasting with Adaptive Frequency Warping and Post-Pretraining Forgetting** (NeurIPS 2026).
+This repository contains anonymized code for reproducing the experiments in the submitted paper.
 
 ## Abstract
 
@@ -23,7 +20,7 @@ TFMIX combines three core innovations:
 
 ## Main Results
 
-Across twelve public forecasting benchmarks, TFMIX matches or surpasses strong self-supervised (SimMTM, TimeDART) and supervised (PatchTST, DLinear) baselines, attaining the lowest MSE and MAE on six datasets (ETTh2, ETTm1, ETTm2, Electricity, PEMS07, and Exchange).
+Across eleven public forecasting benchmarks, TFMIX matches or surpasses strong self-supervised (SimMTM, TimeDART) and supervised (PatchTST, DLinear) baselines, attaining the lowest MSE and MAE on six datasets (ETTh2, ETTm1, ETTm2, Electricity, PEMS07, and Exchange).
 
 ![Main Results](assets/results.png)
 
@@ -43,10 +40,10 @@ pip install -r requirements.txt
 
 ### Data Preparation
 
-We evaluate on 12 standard benchmarks spanning energy, weather, financial, and traffic domains:
+We evaluate on 11 standard benchmarks spanning energy, weather, financial, and traffic domains:
 
 - ETT datasets: ETTh1, ETTh2, ETTm1, ETTm2
-- Electricity, Traffic, Weather, Exchange
+- Electricity, Weather, Exchange
 - PEMS traffic datasets: PEMS03, PEMS04, PEMS07, PEMS08
 
 Place the downloaded datasets into the `./dataset/` directory.
@@ -60,8 +57,9 @@ All experimental scripts can be found in the `./scripts/` directory. We use a ch
 To pre-train TFMIX on the ETTh1 dataset using the default hyperparameters:
 
 ```bash
-python run_pretrain.py \
-  --dataset ETTh1 \
+python run.py \
+  --task_name pretrain \
+  --data ETTh1 \
   --seq_len 336 \
   --d_model 128 \
   --patch_len 16 \
@@ -77,8 +75,9 @@ python run_pretrain.py \
 To fine-tune the pre-trained model for long-horizon forecasting, for example $H=96$:
 
 ```bash
-python run_finetune.py \
-  --dataset ETTh1 \
+python run.py \
+  --task_name finetune \
+  --data ETTh1 \
   --seq_len 336 \
   --pred_len 96 \
   --d_model 128 \
@@ -103,7 +102,3 @@ If you find this repository useful for your research, please consider citing our
   year={2026}
 }
 ```
-
-## Acknowledgements
-
-We build upon the excellent codebases of PatchTST, SimMTM, and TimeDART. We thank the authors for open-sourcing their work.
